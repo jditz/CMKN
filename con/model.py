@@ -8,7 +8,10 @@
 import sys
 import torch
 from torch import nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import numpy as np
+from timeit import default_timer as timer
+import copy
 
 from .layers import POOLINGS, CONLayer, CKNLayer, LinearMax
 
@@ -199,6 +202,10 @@ class CONSequential(nn.Module):
         - **Returns**::
 
             :return: Mask of the specified layer or None if no mask is used
+
+        - **Exceptions**::
+
+            :raise ValueError if layer index n is out of bound
         """
         if mask is None:
             return mask
@@ -208,14 +215,14 @@ class CONSequential(nn.Module):
         if n == -1:
             n = self.n_layers
         for i in range(1, n):
-            mask = self.ckn_layers[i].compute_mask(mask)
+            mask = self.con_layers[i].compute_mask(mask)
         return mask
 
     def normalize_(self):
         """ Function to normalize the weights of each layer. The kernel function is valid iff all weights are
         normalized.
         """
-        for module in self.ckn_layers:
+        for module in self.con_layers:
             module.normalize_()
 
 
@@ -350,7 +357,7 @@ class CON(nn.Module):
         output = self.representation(input)
         return self.classifier(output, proba)
 
-    def unsup_train_ckn(self, data_loader, n_sampling_patches=100000, init=None, use_cuda=False):
+    def unsup_train_con(self, data_loader, n_sampling_patches=100000, init=None, use_cuda=False):
         """ This function initializes the anchor points for each CON layer in an unsupervised fashion
 
         - **Parameters**::
@@ -373,28 +380,46 @@ class CON(nn.Module):
             # initialize the CON layer
             if i == 0:
                 print("Training layer {}".format(i))
+
+                # initialize the anchor points of the CON layer in an unsupervised fashion
                 con_layer.unsup_train(self.seq_len)
-            # initialize all of the CKN layers
+
+            # initialize all of the remaining CKN layers
             else:
                 print("Training layer {}".format(i))
                 n_patches = 0
+                # set the number of patches per batch
                 try:
                     n_patches_per_batch = (n_sampling_patches + len(data_loader) - 1) // len(data_loader)
                 except:
                     n_patches_per_batch = 1000
+
+                # initialize the tensor that will store all patches and transport this tensor to the GPU if
+                # necessary
                 patches = torch.Tensor(n_sampling_patches, con_layer.patch_dim)
                 if use_cuda:
                     patches = patches.cuda()
 
+                # iterate through all data
                 for data, _ in data_loader:
+                    # skip if already enough patches were sampled
                     if n_patches >= n_sampling_patches:
                         continue
+
+                    # transfer data to GPU if necessary
                     if use_cuda:
                         data = data.cuda()
+
+                    # do not keep track of the gradients
                     with torch.no_grad():
+                        # do a forward propagation to the current layer and retrieve result and mask
                         data, mask = self.representation_at(data, i)
-                        data_patches = con_layer.sample_patches(
-                            data, mask, n_patches_per_batch)
+
+                        # sample patches from the current layer using the results from the forward propagation
+                        data_patches = con_layer.sample_patches(data, mask, n_patches_per_batch)
+
+                    # make sure that the specified number of patches is used for the unsupervised initialization of the
+                    # layer's anchor points
                     size = data_patches.size(0)
                     if n_patches + size > n_sampling_patches:
                         size = n_sampling_patches - n_patches
@@ -404,6 +429,8 @@ class CON(nn.Module):
 
                 print("total number of patches: {}".format(n_patches))
                 patches = patches[:n_patches]
+
+                # initialize the anchor points of the current CKN layer in an unsupervised fashion
                 con_layer.unsup_train(patches, init=init)
 
     def unsup_train_classifier(self, data_loader, criterion=None, use_cuda=False):
@@ -495,3 +522,171 @@ class CON(nn.Module):
         # return the forward propagation results and the real targets
         output.squeeze_(-1)
         return output, target_output
+
+    def sup_train(self, train_loader, criterion, optimizer, lr_scheduler=None, init_train_loader=None, epochs=100,
+                  val_loader=None, n_sampling_patches=500000, unsup_init=None, use_cuda=False, early_stop=True):
+        """ Perform supervised training of the CON model
+
+        - **Parameters**::
+
+            :param train_loader: PyTorch DataLoader that handles data
+                :type train_loader: torch.utils.data.DataLoader
+            :param criterion: Specifies the loss function.
+                :type criterion: PyTorch Loss function (e.g. torch.nn.L1Loss)
+            :param optimizer: Optimization algorithm used during training
+                :type optimizer: PyTorch Optimizer (e.g. torch.optim.Adam)
+            :param lr_scheduler: Algorithm used for learning rate adjustment
+                :type lr_scheduler: PyTorch LR Scheduler (e.g. torch.optim.lr_scheduler.LambdaLR) (Default: None)
+            :param init_train_loader: PyTorch DataLoader that handles data during the unsupervised initialization of
+                                      anchor points. Data handled by train_loader is used if no DataLoader is specified.
+                :type init_train_loader: torch.utils.data.DataLoader (Default_ None)
+            :param epochs: Number of epochs during training
+                :type epochs: Integer (Default: 100)
+            :param val_loader: PyTorch DataLoader that handles data during the validation phase
+                :type val_loader: torch.utils.data.DataLoader (Default: None)
+            :param n_sampling_patches: Number of patches used during anchor points initialization
+                :type n_sampling_patches: Integer (Default: 500000)
+            :param unsup_init: Can be set to "kmeans++" for a more sophisticated initialization of the spherical k-means
+                         algorithm
+                :type unsup_init: String (Default: None)
+            :param use_cuda: Specified whether all computations will be performed on the GPU
+                :type use_cuda: Boolean (Default: False)
+            :param early_stop: Specifies if early stopping will be used during training
+                :type early_stop: Boolean (Default: True)
+
+        - **Returns**::
+
+            :return trained model
+        """
+        print("Initializing CON layers")
+        tic = timer()
+
+        # initialize the anchor points of all layers that use anchor points in an unsupervised fashion
+        if init_train_loader is not None:
+            self.unsup_train_con(init_train_loader, n_sampling_patches, init=unsup_init, use_cuda=use_cuda)
+        else:
+            self.unsup_train_con(train_loader, n_sampling_patches, init=unsup_init, use_cuda=use_cuda)
+        toc = timer()
+        print("Finished, elapsed time: {:.2f}min".format((toc - tic) / 60))
+
+        # specify the data used for each phase
+        #   -> ATTENTION: a validation phase only exists if val_loader is not None
+        phases = ['train']
+        data_loader = {'train': train_loader}
+        if val_loader is not None:
+            phases.append('val')
+            data_loader['val'] = val_loader
+
+        # initialize variables to keep track of the epoch's loss, the best loss, and the best accuracy
+        epoch_loss = None
+        best_loss = float('inf')
+        best_acc = 0
+
+        # iterate over all epochs
+        for epoch in range(epochs):
+            print('Epoch {}/{}'.format(epoch + 1, epochs))
+            print('-' * 10)
+
+            # set the models train mode to False
+            self.train(False)
+
+            # for each epoch, initialize the classification layer in an unsupervised fashion
+            self.unsup_train_classifier(train_loader, criterion, use_cuda=use_cuda)
+
+            # iterate over all phases of the training process
+            for phase in phases:
+
+                # if there is a 'train' phase, set model's train mode to True and initialize the Learning Rate Scheduler
+                # (if one was specified)
+                if phase == 'train':
+                    if lr_scheduler is not None:
+
+                        # if the learning rate scheduler is 'ReduceLROnPlateau' and there is a current loss, the next
+                        # lr step needs the current loss as input
+                        if isinstance(lr_scheduler, ReduceLROnPlateau):
+                            if epoch_loss is not None:
+                                lr_scheduler.step(epoch_loss)
+
+                        # otherwise call the step() function of the learning rate scheduler
+                        else:
+                            lr_scheduler.step()
+
+                        # print the current learning rate
+                        print("current LR: {}".format(
+                            optimizer.param_groups[0]['lr']))
+
+                    # set model's train mode to True
+                    self.train(True)
+                else:
+                    self.train(False)
+
+                # initialize variables to keep track of the loss and the number of correctly classified samples in the
+                # current epoch
+                running_loss = 0.0
+                running_corrects = 0
+
+                # iterate over the data that will be used in the current phase
+                for data, target, *_ in data_loader[phase]:
+                    size = data.size(0)
+                    target = target.float()
+
+                    # if the computations take place on the GPU, send data to GPU
+                    if use_cuda:
+                        data = data.cuda()
+                        target = target.cuda()
+
+                    # zero the parameter gradients
+                    optimizer.zero_grad()
+
+                    # forward propagation through the model
+                    #   -> do not keep track of the gradients if we are in the validation phase
+                    if phase == 'val':
+                        with torch.no_grad():
+                            output = self(data).view(-1)
+                            pred = (output.data > 0).float()
+                            loss = criterion(output, target)
+                    else:
+                        output = self(data).view(-1)
+                        pred = (output > 0).float()
+                        loss = criterion(output, target)
+
+                    # backward propagate + optimize only if in training phase
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+                        self.normalize_()
+
+                    # update statistics
+                    running_loss += loss.item() * size
+                    running_corrects += torch.sum(pred == target.data).item()
+
+                # calculate loss and accuracy in the current epoch
+                epoch_loss = running_loss / len(data_loader[phase].dataset)
+                epoch_acc = running_corrects / len(data_loader[phase].dataset)
+
+                print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+                    phase, epoch_loss, epoch_acc))
+
+                # deep copy the model
+                if (phase == 'val') and epoch_loss < best_loss:
+                    best_acc = epoch_acc
+                    best_loss = epoch_loss
+
+                    # store model parameters only if the generalization error improved (i.e. early stopping)
+                    if early_stop:
+                        best_weights = copy.deepcopy(self.state_dict())
+
+            print()
+
+        # report training results
+        print('Finish at epoch: {}'.format(epoch + 1))
+        print('Best val Acc: {:4f}'.format(best_acc))
+        print('Best val loss: {:4f}'.format(best_loss))
+
+        # if early stopping is enabled, make sure that the parameters are used, which resulted in the best
+        # generalization error
+        if early_stop:
+            self.load_state_dict(best_weights)
+
+        return self
+
