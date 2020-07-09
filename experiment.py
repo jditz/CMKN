@@ -15,12 +15,42 @@ from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
 
-from con import CON
+from con import CON, CONDataset
 
 from timeit import default_timer as timer
 
 name = 'example_experiment'
 data_dir = './data/'
+
+
+# extend custom data handler for the used dataset
+class CustomHandler(CONDataset):
+    def __init__(self, filepath):
+        super(CustomHandler, self).__init__(filepath, alphabet='PROTEIN_AMBI')
+
+        self.all_categories = ['H', 'M', 'L']
+
+    def __getitem__(self, idx):
+        # get a sample using the parent __getitem__ function
+        sample = super(CustomHandler, self).__getitem__(idx)
+
+        # initialize label tensor
+        labels = torch.zeros(len(sample['label']), 3)
+
+        # iterate through all id strings and update the label tensor, accordingly
+        for i, id_str in enumerate(sample['label']):
+            try:
+                aux_lab = id_str.split('|')[7]
+                if aux_lab != 'NA':
+                    labels[i, self.all_categories.index(aux_lab)] = 1.0
+
+            except:
+                continue
+
+        # return the sample with updated label tensor
+        sample = {'data': sample['data'], 'label': labels}
+        return sample
+
 
 def load_args():
     """

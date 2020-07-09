@@ -12,5 +12,6 @@
 
 from .model import CON
 from .utils import find_kmer_positions, kmer2dict, category_from_output
+from .data_utils import CONDataset
 
-__all__ = ['CON', 'find_kmer_positions', 'kmer2dict', 'category_from_output']
+__all__ = ['CON', 'CONDataset', 'find_kmer_positions', 'kmer2dict', 'category_from_output']
