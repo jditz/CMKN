@@ -150,3 +150,16 @@ def load_args():
         args.outdir = outdir
 
     return args
+
+
+def main(filepath):
+    data = CustomHandler(filepath)
+    loader = DataLoader(data, batch_size=4, shuffle=True)
+
+    for i_batch, sample_batched in enumerate(loader):
+        print(i_batch, sum(sum(sum(sample_batched['data']))), sample_batched['label'])
+        break
+
+
+if __name__ == '__main__':
+    main('./data/processed_PI_DataSet_sample_labels.fasta')

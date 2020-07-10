@@ -93,15 +93,19 @@ class CONDataset(data.Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
+        # if idx is an integer, convert to list
+        if isinstance(idx, int):
+            idx = [idx]
+
         # initialize data tensor
-        data = torch.zeros(len(idx), len(self.kmer_dict), self.seq_len)
+        data_tensor = torch.zeros(len(idx), len(self.kmer_dict), self.seq_len)
 
         # fill the data tensor
-        for i in idx:
+        for i, sample in enumerate(idx):
             # create list of k-mer positions in the current sequence for each k-mer over the alphabet
             #     -> raise exception if one of the sequences is not created with the specified alphabet
             try:
-                positions = find_kmer_positions(self.data[i].seq, self.kmer_dict, self.kmer_size)
+                positions = find_kmer_positions(self.data[sample].seq, self.kmer_dict, self.kmer_size)
             except ValueError:
                 raise
 
@@ -110,8 +114,8 @@ class CONDataset(data.Dataset):
 
                 # for each kmer, iterate over all occurences and update data tensor, accordingly
                 for pos in positions[j]:
-                    data[i, j, pos] = 1
+                    data_tensor[i, j, pos] = 1
 
         # return data tensor and id string
-        sample = {'data': data, 'label': [self.data[i].id for i in idx]}
+        sample = {'data': data_tensor, 'label': [self.data[i].id for i in idx]}
         return sample
