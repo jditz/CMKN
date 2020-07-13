@@ -142,11 +142,11 @@ class CONLayer(nn.Conv1d):
         """
         # create the input tensor
         in_size = x_in.size()
-        aux_in = torch.zeros([in_size[0], self.in_channels, in_size[2]])
-        for i in range(in_size[2]):
+        aux_in = torch.zeros([in_size[0], self.in_channels, in_size[-1]])
+        for i in range(in_size[-1]):
             # project current position on the upper half of the unit circle
-            x_circle = np.cos(((i+1)/in_size[2]) * np.pi)
-            y_circle = np.sin(((i+1)/in_size[2]) * np.pi)
+            x_circle = np.cos(((i+1)/in_size[-1]) * np.pi)
+            y_circle = np.sin(((i+1)/in_size[-1]) * np.pi)
 
             # fill the input tensor
             aux_in[:, 0, i] = x_circle
@@ -162,27 +162,27 @@ class CONLayer(nn.Conv1d):
         z_pos = []
         for i in range(self.out_channels):
             # convert 2d coordinates into sequence position
-            seq_pos = (np.arccos(self.weight[i, 0].item()) / np.pi) * in_size[2]
+            seq_pos = (np.arccos(self.weight[i, 0].item()) / np.pi) * in_size[-1]
 
             # in most cases, the calculated position will be a floating point number
             #   -> we need to get the integer and fractual part of this number
             z_pos.append(math.modf(seq_pos))
 
         # initialize the tensor that holds <phi(x), phi(z)>
-        dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[2]])
+        dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]])
 
         # fill out the dot product kernel by iterating in following order
         #   1. over all positions
         #   2. over all anchor points
         #   3. over the batch size
-        for i in range(in_size[2]):
+        for i in range(in_size[-1]):
             for j in range(self.out_channels):
                 for k in range(in_size[0]):
                     # calculate the phi(z) vector for the current anchor point
                     #   -> since the position will be a float in most cases, this vector is a weighted combination
                     #      from two positions in self.ref_kmerPos
-                    aux_phi_z = ((1 - z_pos[i][0]) * self.ref_kmerPos[:, z_pos[i][1]] +
-                                 z_pos[i][0] * self.ref_kmerPos[:, z_pos[i][1] + 1]) / 2
+                    aux_phi_z = ((1 - z_pos[i][0]) * self.ref_kmerPos[:, int(z_pos[i][1])] +
+                                 z_pos[i][0] * self.ref_kmerPos[:, int(z_pos[i][1]) + 1]) / 2
 
                     # calculate the dot product
                     dot_phi[k, j, i] = torch.dot(x_in[k, :, i], aux_phi_z)
@@ -256,7 +256,7 @@ class CONLayer(nn.Conv1d):
         # initialize weight tensor
         weight = torch.zeros([self.out_channels, self.in_channels])
         # fill the tensor by projecting anchor point positions onto the upper half of the unit circle
-        for i in range(self.outchannels):
+        for i in range(self.out_channels):
             # calculate the x coordinate
             weight[i, 0] = np.cos((anchors[i]/seq_len) * np.pi)
             weight[i, 1] = np.sin((anchors[i]/seq_len) * np.pi)

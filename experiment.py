@@ -15,7 +15,7 @@ from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
 
-from con import CON, CONDataset
+from con import CON, CONDataset, kmer2dict, build_kmer_ref
 
 from timeit import default_timer as timer
 
@@ -35,10 +35,10 @@ class CustomHandler(CONDataset):
         sample = super(CustomHandler, self).__getitem__(idx)
 
         # initialize label tensor
-        labels = torch.zeros(len(sample['label']), 3)
+        labels = torch.zeros(len(sample[1]), 3)
 
         # iterate through all id strings and update the label tensor, accordingly
-        for i, id_str in enumerate(sample['label']):
+        for i, id_str in enumerate(sample[1]):
             try:
                 aux_lab = id_str.split('|')[7]
                 if aux_lab != 'NA':
@@ -48,7 +48,7 @@ class CustomHandler(CONDataset):
                 continue
 
         # return the sample with updated label tensor
-        sample = {'data': sample['data'], 'label': labels}
+        sample = (sample[0], labels)
         return sample
 
 
@@ -152,14 +152,38 @@ def load_args():
     return args
 
 
-def main(filepath):
+def test_exp():
+    # set parameters for the test run
+    filepath = './data/test_dataset.fasta'
+    extension = 'fasta'
+    kmer_size = 3
+    alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
+
+    # create dictionary that maps kmers to index
+    kmer_dict = kmer2dict(kmer_size, alphabet)
+
+    # build tensor holding reference positions
+    ref_pos = build_kmer_ref(filepath, extension, kmer_dict, kmer_size)
+
+    # initialize con model
+    con_model = CON([40], ref_pos, [], [1])
+
+    # load data
     data = CustomHandler(filepath)
     loader = DataLoader(data, batch_size=4, shuffle=True)
 
-    for i_batch, sample_batched in enumerate(loader):
-        print(i_batch, sum(sum(sum(sample_batched['data']))), sample_batched['label'])
-        break
+    # initialize optimizer and loss function
+    criterion = nn.L1Loss
+    optimizer = optim.Adam
+
+    # train model
+    con_model.sup_train(loader, criterion, optimizer)
+
+
+def main(filepath):
+    print('main')
 
 
 if __name__ == '__main__':
-    main('./data/processed_PI_DataSet_sample_labels.fasta')
+    #main('./data/test_dataset.fasta')
+    test_exp()

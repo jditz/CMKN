@@ -77,7 +77,7 @@ class CONDataset(data.Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        """ Implementation of the getitem routine. A sample if provided as a dictionary holding a data tensor and a
+        """ Implementation of the getitem routine. A sample if provided as a tuple holding a data tensor and a
         label list that contains the ids of all entries in the data tensor.
 
         - **Parameters**::
@@ -117,5 +117,5 @@ class CONDataset(data.Dataset):
                     data_tensor[i, j, pos] = 1
 
         # return data tensor and id string
-        sample = {'data': data_tensor, 'label': [self.data[i].id for i in idx]}
+        sample = (data_tensor, [self.data[i].id for i in idx])
         return sample

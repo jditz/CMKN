@@ -379,14 +379,14 @@ class CON(nn.Module):
         for i, con_layer in enumerate(self.con_model):
             # initialize the CON layer
             if i == 0:
-                print("Training layer {}".format(i))
+                print("Training layer {} (CON layer)".format(i))
 
                 # initialize the anchor points of the CON layer in an unsupervised fashion
                 con_layer.unsup_train(self.seq_len)
 
             # initialize all of the remaining CKN layers
             else:
-                print("Training layer {}".format(i))
+                print("Training layer {} (CKN layer)".format(i))
                 n_patches = 0
                 # set the number of patches per batch
                 try:
@@ -689,4 +689,3 @@ class CON(nn.Module):
             self.load_state_dict(best_weights)
 
         return self
-

@@ -9,6 +9,7 @@ import math
 import numpy as np
 from itertools import combinations, product
 import torch
+from Bio import SeqIO
 
 
 # definition of macros
@@ -88,6 +89,38 @@ def kmer2dict(kmer_size, alphabet):
         kmer_dict.update({''.join(kmer): len(kmer_dict)})
 
     return kmer_dict
+
+
+def build_kmer_ref(filepath, extension, kmer_dict, kmer_size):
+    """
+
+    """
+    # get the length of the sequences in the dataset by first reading only the first entry
+    first_record = next(SeqIO.parse(filepath, extension))
+
+    # initialize the tensor holding the kmer reference positions
+    ref_pos = torch.zeros(len(kmer_dict), len(first_record.seq))
+
+    # keep track of the number of sequences in the dataset
+    data_size = 0
+
+    with open(filepath, 'rU') as handle:
+        # iterate through file
+        for record in SeqIO.parse(handle, extension):
+
+            # update number of sequences in the dataset
+            data_size += 1
+
+            # get kmer positions in the current sequence
+            positions = find_kmer_positions(record.seq, kmer_dict, kmer_size)
+
+            # update reference tensor
+            for i, pos in enumerate(positions):
+                for p in pos:
+                    ref_pos[i, p] += 1
+
+    # devide every entry in the ref position tensor by the size of the dataset
+    return ref_pos / data_size
 
 
 def category_from_output(output):
