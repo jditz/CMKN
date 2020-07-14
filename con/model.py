@@ -234,7 +234,7 @@ class CON(nn.Module):
 
     def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, subsamplings, kernel_funcs=None,
                  kernel_args_list=None, kernel_args_trainable=False, alpha=0., fit_bias=True, global_pool='sum',
-                 penalty='l2', scaler='standard_row', **kwargs):
+                 penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
         """Constructor of the CON class.
 
         - **Parameters**::
@@ -265,6 +265,8 @@ class CON(nn.Module):
                 :type penalty: String (Default: 'l2')
             :param scaler: Specifies which scaler will be used
                 :type scaler: String
+            :param num_classes: Number of classes in the current classification problem
+                :type num_classes: Integer
 
         - **Exceptions**::
 
@@ -294,7 +296,7 @@ class CON(nn.Module):
 
         # initialize the classification layer
         self.initialize_scaler(scaler)
-        self.classifier = LinearMax(self.out_features, 1, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
+        self.classifier = LinearMax(self.out_features, num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
 
     def initialize_scaler(self, scaler=None):
         pass
@@ -487,7 +489,6 @@ class CON(nn.Module):
         # detect the number of samples that will be classified and initialize tensor that stores the targets of each
         # sample
         n_samples = len(data_loader.dataset)
-        target_output = torch.Tensor(n_samples)
 
         # iterate over all samples
         batch_start = 0
@@ -506,11 +507,12 @@ class CON(nn.Module):
                     batch_out = self(data, proba).data.cpu()
 
             # combine the result of the forward propagation
-            batch_out = torch.cat((batch_out[:batch_size], batch_out[batch_size:]), dim=-1)
+            #batch_out = torch.cat((batch_out[:batch_size], batch_out[batch_size:]), dim=-1)
 
             # initialize tensor that holds the results of the forward propagation for each sample
             if i == 0:
                 output = torch.Tensor(n_samples, batch_out.shape[-1])
+                target_output = torch.Tensor(n_samples, target.shape[-1])
 
             # update output and target_output tensor with the current results
             output[batch_start:batch_start + batch_size] = batch_out
@@ -642,11 +644,11 @@ class CON(nn.Module):
                     #   -> do not keep track of the gradients if we are in the validation phase
                     if phase == 'val':
                         with torch.no_grad():
-                            output = self(data).view(-1)
+                            output = self(data)
                             pred = (output.data > 0).float()
                             loss = criterion(output, target)
                     else:
-                        output = self(data).view(-1)
+                        output = self(data)
                         pred = (output > 0).float()
                         loss = criterion(output, target)
 

@@ -162,7 +162,7 @@ class CONLayer(nn.Conv1d):
         z_pos = []
         for i in range(self.out_channels):
             # convert 2d coordinates into sequence position
-            seq_pos = (np.arccos(self.weight[i, 0].item()) / np.pi) * in_size[-1]
+            seq_pos = (np.arccos(self.weight[i, 0].item()) / np.pi) * (in_size[-1] - 1)
 
             # in most cases, the calculated position will be a floating point number
             #   -> we need to get the integer and fractual part of this number
@@ -171,7 +171,7 @@ class CONLayer(nn.Conv1d):
         # initialize the tensor that holds <phi(x), phi(z)>
         dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]])
 
-        # fill out the dot product kernel by iterating in following order
+        # fill out the dot product tensor by iterating in following order
         #   1. over all positions
         #   2. over all anchor points
         #   3. over the batch size
@@ -181,8 +181,12 @@ class CONLayer(nn.Conv1d):
                     # calculate the phi(z) vector for the current anchor point
                     #   -> since the position will be a float in most cases, this vector is a weighted combination
                     #      from two positions in self.ref_kmerPos
-                    aux_phi_z = ((1 - z_pos[i][0]) * self.ref_kmerPos[:, int(z_pos[i][1])] +
-                                 z_pos[i][0] * self.ref_kmerPos[:, int(z_pos[i][1]) + 1]) / 2
+                    #   -> make sure to prevent out of index errors
+                    if int(z_pos[j][1]) < (in_size[-1] - 1):
+                        aux_phi_z = ((1 - z_pos[j][0]) * self.ref_kmerPos[:, int(z_pos[j][1])] +
+                                     z_pos[j][0] * self.ref_kmerPos[:, int(z_pos[j][1]) + 1]) / 2
+                    else:
+                        aux_phi_z = self.ref_kmerPos[:, int(z_pos[j][1])]
 
                     # calculate the dot product
                     dot_phi[k, j, i] = torch.dot(x_in[k, :, i], aux_phi_z)
@@ -563,63 +567,121 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
         return out
 
     def fit(self, x, y, criterion=None):
+        # determine if computations take place on GPU
         use_cuda = self.weight.data.is_cuda
+
+        # initialize the loss function
         if criterion is None:
             criterion = nn.BCEWithLogitsLoss()
-        reduction = criterion.reduction
         criterion.reduction = 'sum'
+        reduction = criterion.reduction
+
+        # make sure that input is given as Tensors
         if isinstance(x, np.ndarray) or isinstance(y, np.ndarray):
             x = torch.from_numpy(x)
             y = torch.from_numpy(y)
+
+        # transfer input to GPU, if necessary
         if use_cuda:
             x = x.cuda()
             y = y.cuda()
 
         def eval_loss(w):
+            """ Custom loss evaluation function for the optimization routine.
+            """
+            # make sure that w has the correct first dimension
             w = w.reshape((self.out_features, -1))
+
+            # reset weight gradient, if necessary
             if self.weight.grad is not None:
                 self.weight.grad = None
+
+            # check, whether a bias is used by the layer
+            #   -> if no bias is used, w can be copied to the weight tensor, directly
+            #   -> if a bias is used, w has to be split appropriately before being copied to the weight and bias tensors
             if self.bias is None:
                 self.weight.data.copy_(torch.from_numpy(w))
             else:
+                # reset bias gradient, if necessary
                 if self.bias.grad is not None:
                     self.bias.grad = None
                 self.weight.data.copy_(torch.from_numpy(w[:, :-1]))
                 self.bias.data.copy_(torch.from_numpy(w[:, -1]))
-            y_pred = self(x).view(-1)
+
+            # perform a classification with the given input
+            y_pred = self(x)
+
+            # calculate the loss
             loss = criterion(y_pred, y)
+
+            # perform back propagation with the calculated loss
             loss.backward()
+
+            # check if regularization is used
+            #   -> regularization will be performed if alpha is greater than zero
             if self.alpha != 0.0:
+
+                # calculate the l2 regularization term, if this type of penalty was selected
                 if self.penalty == "l2":
                     penalty = 0.5 * self.alpha * torch.norm(self.weight)**2
+
+                # calculate the l1 regularization term, if this type of penalty was selected
                 elif self.penalty == "l1":
                     penalty = self.alpha * torch.norm(self.weight, p=1)
                     penalty.backward()
+
+                # catch the case were users insert an invalid argument for the penalty parameter
+                else:
+                    penalty = 0
+
+                # incorporate the regularization term into the loss
                 loss = loss + penalty
+
+            # return the calculated loss
             return loss.item()
 
         def eval_grad(w):
+            """ Custom gradient evaluation function for the optimization routine
+            """
+            # get the current gradient
             dw = self.weight.grad.data
+
+            # extra step for l2 regularization, if "l2" was selected for the penalty option and alpha is set to a value
+            # greater than zero
             if self.alpha != 0.0:
                 if self.penalty == "l2":
                     dw.add_(self.alpha, self.weight.data)
+
+            # if a bias was specified, combine weight and bias gradient to optimize both
             if self.bias is not None:
                 db = self.bias.grad.data
                 dw = torch.cat((dw, db.view(-1, 1)), dim=1)
+
+            # return the computed gradient as a flatten numpy array
             return dw.cpu().numpy().ravel().astype("float64")
 
+        # get initial tensor for the optimization
+        #   -> if there is a bias, combine the bias and weight tensors
         w_init = self.weight.data
         if self.bias is not None:
             w_init = torch.cat((w_init, self.bias.data.view(-1, 1)), dim=1)
         w_init = w_init.cpu().numpy().astype("float64")
 
-        w = optimize.fmin_l_bfgs_b(
-            eval_loss, w_init, fprime=eval_grad, maxiter=100, disp=0)
+        # perform the optimization routine
+        w = optimize.fmin_l_bfgs_b(eval_loss, w_init, fprime=eval_grad, maxiter=100, disp=0)
         if isinstance(w, tuple):
             w = w[0]
 
+        # make sure that tensor w and the weight tensor have the same shape
         w = w.reshape((self.out_features, -1))
+
+        # reset the weight gradient
         self.weight.grad.data.zero_()
+
+        # store result of the optimization routine
+        #   -> if no bias was specified, the resulting tensor can be directly copied to the weight tensor
+        #   -> if a bias was specified, the resulting tensor must be split appropriately before copying the content to
+        #      the weight and bias vector
         if self.bias is None:
             self.weight.data.copy_(torch.from_numpy(w))
         else:

@@ -9,6 +9,7 @@ import math
 import numpy as np
 from itertools import combinations, product
 import torch
+from torch.autograd import Variable
 from Bio import SeqIO
 
 

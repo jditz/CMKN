@@ -98,7 +98,10 @@ class CONDataset(data.Dataset):
             idx = [idx]
 
         # initialize data tensor
-        data_tensor = torch.zeros(len(idx), len(self.kmer_dict), self.seq_len)
+        if len(idx) == 1:
+            data_tensor = torch.zeros(len(self.kmer_dict), self.seq_len)
+        else:
+            data_tensor = torch.zeros(len(idx), len(self.kmer_dict), self.seq_len)
 
         # fill the data tensor
         for i, sample in enumerate(idx):
@@ -114,7 +117,11 @@ class CONDataset(data.Dataset):
 
                 # for each kmer, iterate over all occurences and update data tensor, accordingly
                 for pos in positions[j]:
-                    data_tensor[i, j, pos] = 1
+
+                    if len(idx) == 1:
+                        data_tensor[j, pos] = 1
+                    else:
+                        data_tensor[i, j, pos] = 1
 
         # return data tensor and id string
         sample = (data_tensor, [self.data[i].id for i in idx])

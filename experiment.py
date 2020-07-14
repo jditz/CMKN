@@ -35,14 +35,20 @@ class CustomHandler(CONDataset):
         sample = super(CustomHandler, self).__getitem__(idx)
 
         # initialize label tensor
-        labels = torch.zeros(len(sample[1]), 3)
+        if len(sample[1]) == 1:
+            labels = torch.zeros(3)
+        else:
+            labels = torch.zeros(len(sample[1]), 3)
 
         # iterate through all id strings and update the label tensor, accordingly
         for i, id_str in enumerate(sample[1]):
             try:
                 aux_lab = id_str.split('|')[7]
                 if aux_lab != 'NA':
-                    labels[i, self.all_categories.index(aux_lab)] = 1.0
+                    if len(sample[1]) == 1:
+                        labels[self.all_categories.index(aux_lab)] = 1.0
+                    else:
+                        labels[i, self.all_categories.index(aux_lab)] = 1.0
 
             except:
                 continue
@@ -166,18 +172,24 @@ def test_exp():
     ref_pos = build_kmer_ref(filepath, extension, kmer_dict, kmer_size)
 
     # initialize con model
-    con_model = CON([40], ref_pos, [], [1])
+    model = CON([40], ref_pos, [], [1], num_classes=3)
 
     # load data
     data = CustomHandler(filepath)
     loader = DataLoader(data, batch_size=4, shuffle=True)
 
     # initialize optimizer and loss function
-    criterion = nn.L1Loss
-    optimizer = optim.Adam
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(model.con_model.parameters(), lr=0.1)
 
     # train model
-    con_model.sup_train(loader, criterion, optimizer)
+    model.sup_train(loader, criterion, optimizer)
+
+    # iterate through dataset
+    #for i_batch, sample_batch in enumerate(loader):
+    #    print('shape of batch {}: {}'.format(i_batch, sample_batch[0].shape))
+    #    print('shape of target {}: {}'.format(i_batch, sample_batch[1].shape))
+    #    print('')
 
 
 def main(filepath):
