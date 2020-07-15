@@ -11,6 +11,7 @@ import argparse
 from torch.utils.data import DataLoader
 import torch
 from torch import nn
+from torch.utils.data.sampler import SubsetRandomSampler
 from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
@@ -176,14 +177,32 @@ def test_exp():
 
     # load data
     data = CustomHandler(filepath)
-    loader = DataLoader(data, batch_size=4, shuffle=True)
+
+    # Creating data indices for training and validation splits:
+    validation_split = .2
+    shuffle_dataset = True
+    random_seed = 42
+    dataset_size = len(data)
+    indices = list(range(dataset_size))
+    split = int(np.floor(validation_split * dataset_size))
+    if shuffle_dataset:
+        np.random.seed(random_seed)
+        np.random.shuffle(indices)
+    train_indices, val_indices = indices[split:], indices[:split]
+
+    # Creating PyTorch data samplers and loaders:
+    train_sampler = SubsetRandomSampler(train_indices)
+    val_sampler = SubsetRandomSampler(val_indices)
+
+    loader_train = DataLoader(data, batch_size=4, sampler=train_sampler)
+    loader_val = DataLoader(data, batch_size=4, sampler=val_sampler)
 
     # initialize optimizer and loss function
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.con_model.parameters(), lr=0.1)
 
     # train model
-    model.sup_train(loader, criterion, optimizer)
+    model.sup_train(loader_train, criterion, optimizer, val_loader=loader_val, epochs=10)
 
     # iterate through dataset
     #for i_batch, sample_batch in enumerate(loader):
