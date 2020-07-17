@@ -95,7 +95,7 @@ class CONSequential(nn.Module):
             # initialize every CON layer using all predefined parameters
             #   -> in a multi-layer construction, only the first layer is a specialized CONLayer; following layers are
             #      standard CKNLayers
-            if not i:
+            if i == 0:
                 con_layer = CONLayer(out_channels_list[i], ref_kmerPos, subsampling=subsamplings[i],
                                      kernel_func=kernel_func,
                                      kernel_args=kernel_args,
@@ -103,7 +103,7 @@ class CONSequential(nn.Module):
                                      **kwargs)
             else:
                 con_layer = CKNLayer(in_channels, out_channels_list[i],
-                                     filter_sizes[i], subsampling=subsamplings[i],
+                                     filter_sizes[i-1], subsampling=subsamplings[i],
                                      kernel_func=kernel_func,
                                      kernel_args=kernel_args,
                                      kernel_args_trainable=kernel_args_trainable,

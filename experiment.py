@@ -16,7 +16,7 @@ from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
 
-from con import CON, CONDataset, kmer2dict, build_kmer_ref
+from con import CON, CONDataset, kmer2dict, build_kmer_ref, compute_metrics
 
 from timeit import default_timer as timer
 
@@ -173,7 +173,7 @@ def test_exp():
     ref_pos = build_kmer_ref(filepath, extension, kmer_dict, kmer_size)
 
     # initialize con model
-    model = CON([40], ref_pos, [], [1], num_classes=3)
+    model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'])
 
     # load data
     data = CustomHandler(filepath)
@@ -200,15 +200,22 @@ def test_exp():
     # initialize optimizer and loss function
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.con_model.parameters(), lr=0.1)
+    lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
     # train model
-    model.sup_train(loader_train, criterion, optimizer, val_loader=loader_val, epochs=10)
+    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=10)
 
     # iterate through dataset
     #for i_batch, sample_batch in enumerate(loader):
     #    print('shape of batch {}: {}'.format(i_batch, sample_batch[0].shape))
     #    print('shape of target {}: {}'.format(i_batch, sample_batch[1].shape))
     #    print('')
+
+    # perform "testing" using the validation data point (only for debugging purpose)
+    y_pred, y_true = model.predict(loader_val, proba=True)
+    scores = compute_metrics(y_pred, y_true)
+
+    print(scores)
 
 
 def main(filepath):
