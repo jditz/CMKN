@@ -173,7 +173,8 @@ def test_exp():
     ref_pos = build_kmer_ref(filepath, extension, kmer_dict, kmer_size)
 
     # initialize con model
-    model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'])
+    model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'],
+                kernel_args_list=[[0.5, 1], [0.5]], kernel_args_trainable=[False, False])
 
     # load data
     data = CustomHandler(filepath)

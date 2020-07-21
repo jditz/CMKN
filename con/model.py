@@ -54,7 +54,7 @@ class CONSequential(nn.Module):
         #   -> therefore, raise an AssertionError if the lengths differ
         if not len(out_channels_list) == len(filter_sizes)+1 == len(subsamplings):
             raise ValueError('Incompatible dimensions! \n'
-                             'out_channels_list, filter_sizes, and subsamplings have to be of same length.')
+                             '            out_channels_list, filter_sizes, and subsamplings have to be of same length.')
 
         # in_channel of the CON layer will always be 2
         #   -> set variable in_channel for convenience sake
@@ -86,11 +86,11 @@ class CONSequential(nn.Module):
 
             # set the kernel hyperparameter (e.g. sigma) for all layers, separately
             if kernel_args_list is None:
-                kernel_args = [1, 1]
-                kernel_args_trainable = False
+                kernel_arg = [1, 1]
+                kernel_arg_trainable = False
             else:
-                kernel_args = kernel_args_list[i]
-                kernel_args_trainable = kernel_args_trainable[i]
+                kernel_arg = kernel_args_list[i]
+                kernel_arg_trainable = kernel_args_trainable[i]
 
             # initialize every CON layer using all predefined parameters
             #   -> in a multi-layer construction, only the first layer is a specialized CONLayer; following layers are
@@ -98,15 +98,15 @@ class CONSequential(nn.Module):
             if i == 0:
                 con_layer = CONLayer(out_channels_list[i], ref_kmerPos, subsampling=subsamplings[i],
                                      kernel_func=kernel_func,
-                                     kernel_args=kernel_args,
-                                     kernel_args_trainable=kernel_args_trainable,
+                                     kernel_args=kernel_arg,
+                                     kernel_args_trainable=kernel_arg_trainable,
                                      **kwargs)
             else:
                 con_layer = CKNLayer(in_channels, out_channels_list[i],
                                      filter_sizes[i-1], subsampling=subsamplings[i],
                                      kernel_func=kernel_func,
-                                     kernel_args=kernel_args,
-                                     kernel_args_trainable=kernel_args_trainable,
+                                     kernel_args=kernel_arg,
+                                     kernel_args_trainable=kernel_arg_trainable,
                                      **kwargs)
 
             con_layers.append(con_layer)
@@ -148,14 +148,14 @@ class CONSequential(nn.Module):
         # check if layer index i is out of bound
         if i >= self.n_layers:
             raise ValueError('Layer index out of bound!\n'
-                             'Number of layers: {}'.format(self.n_layers))
+                             '            Number of layers: {}'.format(self.n_layers))
 
         # check if input x is suitable for layer i
-        if not x.size(1) == self.ckn_layers[i].in_channels:
-            raise ValueError('Incompatible dimensions!\n'
-                             'Given input does not have the correct number of input channels for layer {}.'.format(i))
+        if i > 0 and not x.size(1) == self.con_layers[i].in_channels:
+            raise ValueError('Incompatible dimensions!\n            Given input does not have the correct number of '
+                             'input channels for layer {}.'.format(i))
 
-        return self.ckn_layers[i](x)
+        return self.con_layers[i](x)
 
     def forward(self, x):
         """ Overwritten forward function for CONSequential objects
@@ -182,7 +182,7 @@ class CONSequential(nn.Module):
 
         - **Returns**::
 
-            :return: Evaluation of the input using only the specified subset of CONSequential's layers
+            :return: Representation of the input using only the specified subset of CONSequential's layers
         """
         if n == -1:
             n = self.n_layers
@@ -381,14 +381,14 @@ class CON(nn.Module):
         for i, con_layer in enumerate(self.con_model):
             # initialize the CON layer
             if i == 0:
-                print("Training layer {} (CON layer)".format(i))
+                print("Training layer {} (oligo layer)".format(i))
 
                 # initialize the anchor points of the CON layer in an unsupervised fashion
                 con_layer.unsup_train(self.seq_len)
 
             # initialize all of the remaining CKN layers
             else:
-                print("Training layer {} (CKN layer)".format(i))
+                print("Training layer {} (kernel layer)".format(i))
                 n_patches = 0
                 # set the number of patches per batch
                 try:
@@ -414,10 +414,10 @@ class CON(nn.Module):
 
                     # do not keep track of the gradients
                     with torch.no_grad():
-                        # do a forward propagation to the current layer and retrieve result and mask
-                        data, mask = self.representation_at(data, i)
+                        # do a forward propagation to the current layer and retrieve representation and mask
+                        data, mask = self.representation_at(data, n=i)
 
-                        # sample patches from the current layer using the results from the forward propagation
+                        # sample patches from the current layer using the representation from the forward propagation
                         data_patches = con_layer.sample_patches(data, mask, n_patches_per_batch)
 
                     # make sure that the specified number of patches is used for the unsupervised initialization of the
