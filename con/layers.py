@@ -171,6 +171,11 @@ class CONLayer(nn.Conv1d):
         # initialize the tensor that holds <phi(x), phi(z)>
         dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]])
 
+        # check if ther is a NaN
+        if np.isnan(z_pos).any():
+            print(self.weight)
+            print(z_pos)
+
         # fill out the dot product tensor by iterating in following order
         #   1. over all positions
         #   2. over all anchor points

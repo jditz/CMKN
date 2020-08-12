@@ -24,6 +24,22 @@ name = 'example_experiment'
 data_dir = './data/'
 
 
+# A simple hook class that returns the input and output of a layer during forward/backward pass
+class Hook():
+    def __init__(self, module, backward=False):
+        if backward==False:
+            self.hook = module.register_forward_hook(self.hook_fn)
+        else:
+            self.hook = module.register_backward_hook(self.hook_fn)
+
+    def hook_fn(self, module, input, output):
+        self.input = input
+        self.output = output
+
+    def close(self):
+        self.hook.remove()
+
+
 # extend custom data handler for the used dataset
 class CustomHandler(CONDataset):
     def __init__(self, filepath):
@@ -175,6 +191,8 @@ def test_exp():
     # initialize con model
     model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'],
                 kernel_args_list=[[0.5, 1], [0.5]], kernel_args_trainable=[False, False])
+    #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
+    #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
 
     # load data
     data = CustomHandler(filepath)
@@ -199,12 +217,58 @@ def test_exp():
     loader_val = DataLoader(data, batch_size=4, sampler=val_sampler)
 
     # initialize optimizer and loss function
-    criterion = nn.BCEWithLogitsLoss()
+    #criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.MSELoss()
     optimizer = optim.Adam(model.con_model.parameters(), lr=0.1)
     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
+    # DEBUGGING START
+
+    # iterate over all parameter
+    print(model)
+
+    # register forward and backward hooks
+    hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
+    hookF.append(Hook(list(list(model._modules.items())[0][1])[1]))
+    hookF.append(Hook(list(model._modules.items())[1][1]))
+    hookF.append(Hook(list(model._modules.items())[2][1]))
+    hookB = [Hook(list(list(model._modules.items())[0][1])[0], backward=True)]
+    hookB.append(Hook(list(list(model._modules.items())[0][1])[1], backward=True))
+    hookB.append(Hook(list(model._modules.items())[1][1], backward=True))
+    hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
+
+    for data, target, *_ in loader_train:
+        # perform one forward step
+        out = model(data)
+
+        # backprop to get backward hooks
+        out.backward(target, retain_graph=True)
+
+        # print hooks
+        print()
+        print('***' * 4 + '  Forward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
+        for hook in hookF:
+            try:
+                print([x.shape for x in hook.input])#(hook.input)#.shape)
+            except:
+                print(hook.input[0].shape, hook.input[1:])
+            print(hook.output.shape)#.shape)
+            print('\n' + '---' * 27 + '\n')
+        print('\n')
+        print('***' * 4 + '  Backward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
+        for hook in hookB:
+            print([x.shape for x in hook.input])#(hook.input)#.shape)
+            print([x.shape for x in hook.output])#(hook.output)#.shape)
+            print('\n' + '---' * 27 + '\n')
+
+        break
+
+    return
+
+    # DEBUGGING END
+
     # train model
-    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=10)
+    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=5)
 
     # iterate through dataset
     #for i_batch, sample_batch in enumerate(loader):
@@ -214,7 +278,10 @@ def test_exp():
 
     # perform "testing" using the validation data point (only for debugging purpose)
     y_pred, y_true = model.predict(loader_val, proba=True)
-    scores = compute_metrics(y_pred, y_true)
+    scores = sum(y_pred == y_true) / len(y_pred)
+
+    # compute_metrics might only work for binary classification
+    #scores = compute_metrics(y_pred, y_true)
 
     print(scores)
 
