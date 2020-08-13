@@ -278,6 +278,7 @@ class CON(nn.Module):
 
         # store the length of sequences used as input to this network
         self.seq_len = ref_kmerPos.size(1)
+        self.num_classes = num_classes
 
         # initialize the CON layers and catch thrown exceptions
         try:
@@ -646,11 +647,21 @@ class CON(nn.Module):
                         with torch.no_grad():
                             output = self(data)
                             pred = (output.data > 0).float()
-                            loss = criterion(output, target)
+
+                            # multiclass prediction needs special call of loss function
+                            if self.num_classes > 2:
+                                loss = criterion(output, target.argmax(1))
+                            else:
+                                loss = criterion(output, target)
                     else:
                         output = self(data)
                         pred = (output > 0).float()
-                        loss = criterion(output, target)
+
+                        # multiclass prediction needs special call of loss function
+                        if self.num_classes > 2:
+                            loss = criterion(output, target.argmax(1))
+                        else:
+                            loss = criterion(output, target)
 
                     # backward propagate + optimize only if in training phase
                     if phase == 'train':

@@ -174,7 +174,7 @@ class CONLayer(nn.Conv1d):
         # check if ther is a NaN
         if np.isnan(z_pos).any():
             print(self.weight)
-            print(z_pos)
+            print(self.weight.grad)
 
         # fill out the dot product tensor by iterating in following order
         #   1. over all positions
@@ -564,6 +564,7 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
         self.alpha = alpha
         self.fit_bias = fit_bias
         self.penalty = penalty
+        self.num_classes = out_features
 
     def forward(self, input, proba=False):
         out = super(LinearMax, self).forward(input)
@@ -617,7 +618,11 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
             y_pred = self(x)
 
             # calculate the loss
-            loss = criterion(y_pred, y)
+            #   -> differs between binary and multiclass
+            if self.num_classes > 2:
+                loss = criterion(y_pred, y.argmax(1))
+            else:
+                loss = criterion(y_pred, y)
 
             # perform back propagation with the calculated loss
             loss.backward()
