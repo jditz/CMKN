@@ -11,8 +11,14 @@
 ################################################################
 
 from .model import CON
-from .utils import find_kmer_positions, kmer2dict, category_from_output, build_kmer_ref, compute_metrics
+from .utils import (
+    find_kmer_positions, kmer2dict, category_from_output, build_kmer_ref, compute_metrics, register_hooks,
+    plot_grad_flow
+)
 from .data_utils import CONDataset
 
-__all__ = ['CON', 'CONDataset', 'find_kmer_positions', 'kmer2dict', 'build_kmer_ref', 'category_from_output',
-           'compute_metrics']
+MODEL = ['CON', 'CONDataset']
+UTIL = ['find_kmer_positions', 'kmer2dict', 'build_kmer_ref', 'category_from_output', 'compute_metrics']
+DEBUG = ['register_hooks', 'plot_grad_flow']
+
+__all__ = MODEL + UTIL + DEBUG

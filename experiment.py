@@ -10,138 +10,23 @@ import argparse
 
 from torch.utils.data import DataLoader
 import torch
-from torch import nn
+from torch import nn, autograd
 from torch.utils.data.sampler import SubsetRandomSampler
 from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
 
-from con import CON, CONDataset, kmer2dict, build_kmer_ref, compute_metrics
+from con import CON, CONDataset, kmer2dict, build_kmer_ref, compute_metrics, plot_grad_flow, register_hooks
 
 from timeit import default_timer as timer
-from graphviz import Digraph
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 
 # MACROS
-DEBUGGING = False
+DEBUGGING = True
 
 
 name = 'example_experiment'
 data_dir = './data/'
-
-
-#######################BAD GRAPH VISUALIZATION ROUTINE START#########################
-
-def iter_graph(root, callback):
-    queue = [root]
-    seen = set()
-    while queue:
-        fn = queue.pop()
-        if fn in seen:
-            continue
-        seen.add(fn)
-        for next_fn, _ in fn.next_functions:
-            if next_fn is not None:
-                queue.append(next_fn)
-        callback(fn)
-
-
-def register_hooks(var):
-    fn_dict = {}
-
-    def hook_cb(fn):
-        def register_grad(grad_input, grad_output):
-            fn_dict[fn] = grad_input
-        fn.register_hook(register_grad)
-    iter_graph(var.grad_fn, hook_cb)
-
-    def is_bad_grad(grad_output):
-        grad_output = grad_output.data
-        return grad_output.ne(grad_output).any() or grad_output.gt(1e6).any()
-
-    def make_dot():
-        node_attr = dict(style='filled',
-                        shape='box',
-                        align='left',
-                        fontsize='12',
-                        ranksep='0.1',
-                        height='0.2')
-        dot = Digraph(node_attr=node_attr, graph_attr=dict(size="12,12"))
-
-        def size_to_str(size):
-            return '('+(', ').join(map(str, size))+')'
-
-        def build_graph(fn):
-            if hasattr(fn, 'variable'):  # if GradAccumulator
-                u = fn.variable
-                node_name = 'Variable\n ' + size_to_str(u.size())
-                dot.node(str(id(u)), node_name, fillcolor='lightblue')
-            else:
-                assert fn in fn_dict, fn
-                fillcolor = 'white'
-                if any(is_bad_grad(gi) for gi in fn_dict[fn]):
-                    fillcolor = 'red'
-                dot.node(str(id(fn)), str(type(fn).__name__), fillcolor=fillcolor)
-            for next_fn, _ in fn.next_functions:
-                if next_fn is not None:
-                    next_id = id(getattr(next_fn, 'variable', next_fn))
-                    dot.edge(str(next_id), str(id(fn)))
-        iter_graph(var.grad_fn, build_graph)
-
-        return dot
-
-    return make_dot
-
-
-# A simple hook class that returns the input and output of a layer during forward/backward pass
-class Hook():
-    def __init__(self, module, backward=False):
-        if backward==False:
-            self.hook = module.register_forward_hook(self.hook_fn)
-        else:
-            self.hook = module.register_backward_hook(self.hook_fn)
-
-    def hook_fn(self, module, input, output):
-        self.input = input
-        self.output = output
-
-    def close(self):
-        self.hook.remove()
-
-
-def plot_grad_flow(named_parameters):
-    '''Plots the gradients flowing through different layers in the net during training.
-    Can be used for checking for possible gradient vanishing / exploding problems.
-
-    Usage: Plug this function in Trainer class after loss.backwards() as
-    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
-    ave_grads = []
-    max_grads = []
-    layers = []
-    for n, p in named_parameters:
-        if (p.requires_grad) and ("bias" not in n):
-            layers.append(n)
-            ave_grads.append(p.grad.abs().mean())
-            max_grads.append(p.grad.abs().max())
-    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
-    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
-    plt.hlines(0, 0, len(ave_grads) + 1, lw=2, color="k")
-    plt.xticks(range(0, len(ave_grads), 1), layers, rotation="vertical")
-    plt.xlim(left=0, right=len(ave_grads))
-    #plt.ylim(bottom=-0.001, top=0.02)  # zoom in on the lower gradient regions
-    plt.xlabel("Layers")
-    plt.ylabel("average gradient")
-    plt.title("Gradient flow")
-    plt.grid(True)
-    plt.legend([Line2D([0], [0], color="c", lw=4),
-                Line2D([0], [0], color="b", lw=4),
-                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
-    plt.show()
-
-
-#######################BAD GRAPH VISUALIZATION ROUTINE END#########################
 
 
 # extend custom data handler for the used dataset
@@ -331,6 +216,9 @@ def test_exp():
         # iterate over all parameter
         print(model)
 
+        for name, parameter in model.named_parameters():
+            print(name, parameter, "required_grad = {}".format(parameter.requires_grad))
+
         # register forward and backward hooks
         #hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
         #hookF.append(Hook(list(list(model._modules.items())[0][1])[1]))
@@ -342,22 +230,24 @@ def test_exp():
         #hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
 
         for data, target, *_ in loader_train:
-            # perform one forward step
-            out = model(data)
+            with autograd.detect_anomaly():
+                # perform one forward step
+                out = model(data)
 
-            # register hooks on the out tensor
-            #get_dot = register_hooks(out)
+                # register hooks on the out tensor
+                #get_dot = register_hooks(out)
 
-            # get the dot and save it
-            #dot = get_dot()
-            #dot.save('tmp.dot')
+                # get the dot and save it
+                #dot = get_dot()
+                #dot.save('tmp.dot')
 
-            print(target.shape[1])
+                #print(target.shape[1])
 
-            # backprop to get backward hooks
-            #out.backward(target, retain_graph=True)
-            loss = criterion(out, target.argmax(1))
-            loss.backward()
+                # backprop to get backward hooks
+                #out.backward(target, retain_graph=True)
+                loss = criterion(out, target.argmax(1))
+                loss.backward()
+
             plot_grad_flow(model.named_parameters())
 
             # print hooks
@@ -377,7 +267,7 @@ def test_exp():
             #    print([x.shape for x in hook.output])#(hook.output)#.shape)
             #    print('\n' + '---' * 27 + '\n')
 
-            #break
+            break
 
         return
 
