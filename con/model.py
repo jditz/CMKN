@@ -229,7 +229,8 @@ class CONSequential(nn.Module):
 class CON(nn.Module):
     """Convolutional Oligo Kernel Network
 
-    This class implements the convolutional oligo kernel network introduced by \TODO[reference]
+    This implementation of a convolutional oligo kernel network combines a convolutional oligo kernel layer with CKN
+    layers as introduced by Julien Mairal (Mairal et al., 2016).
     """
 
     def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, subsamplings, kernel_funcs=None,
@@ -702,3 +703,115 @@ class CON(nn.Module):
             self.load_state_dict(best_weights)
 
         return self
+
+
+class CON2(nn.Module):
+    """Convolutional Oligo Kernel Network
+
+    This class implements a version of the Convolutional Oligo Kernel Network that combines a convolutional oligo kernel
+    layer with standard CNN layers. Therefore, no additional CKN layers are used.
+    """
+
+    def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
+                 kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, global_pool='sum',
+                 penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
+        """Constructor of the CON class.
+
+        - **Parameters**::
+
+            :param out_channels_list: Number of output channels of each layer
+                :type out_channels_list: List of Integer
+            :param ref_kmerPos: Distribution of k-mers in the reference sequence. Used for the evaluation of phi(.)
+                                for the anchor points
+                :type ref_kmerPos: Tensor (number of kmers x length of sequence)
+            :param filter_sizes: Size of the filter for each layer
+                :type filter_sizes: List of Integer
+            :param strides: List of stride factors for each layer
+                :type strides: List of Integer
+            :param paddings: List of padding factors for each convolutional layer
+                :type paddings: List of Integer
+            :param kernel_funcs: Specifies the kernel function used in the CON layers
+                :type kernel_funcs: String (Default: None)
+            :param kernel_args_list: List of arguments for the used kernel.
+                :type kernel_args_list: List (Default: None)
+            :param kernel_args_trainable: List that indicates for each layer if the kernel parameters used in
+                                          this layer are trainable.
+                :type kernel_args_trainable: List of Boolean (Default: None)
+            :param alpha: Parameter of the classification layer
+                :type alpha: Float
+            :param fit_bias: Indicates whether the bias of the classification layer should be fitted
+                :type fit_bias: Boolean (Default: True)
+            :param global_pool: Indicates which method should be used for global pooling
+                :type global_pool: String (Default: 'mean')
+            :param penalty: Indicates which penalty method should be used
+                :type penalty: String (Default: 'l2')
+            :param scaler: Specifies which scaler will be used
+                :type scaler: String
+            :param num_classes: Number of classes in the current classification problem
+                :type num_classes: Integer
+
+        - **Exceptions**::
+
+            :raise ValueError if out_channels_list, filter_sizes, and subsamplings are not of the same length.
+        """
+
+        # out_channels_list, filter_sizes, and subsamplings have to be of same length
+        #   -> therefore, raise an AssertionError if the lengths differ
+        if not len(out_channels_list) == len(filter_sizes) + 1 == len(subsamplings):
+            raise ValueError('Incompatible dimensions! \n'
+                             '            out_channels_list, filter_sizes, and subsamplings have to be of same length.')
+
+        # initialize parent class
+        super(CON2, self).__init__()
+
+        # store the length of sequences used as input to this network
+        self.seq_len = ref_kmerPos.size(1)
+        self.num_classes = num_classes
+
+        # initialize the convolutional oligo kernel layer and all additional "normal" convolutional layers
+        convlayers = []
+        for i in len(out_channels_list):
+            # first layer will always be a convolutional oligo kernel layer
+            if i == 0:
+                # set the kernel function for all layers separately
+                if kernel_func is None:
+                    kernel_func = "exp"
+
+                # set the kernel hyperparameter (e.g. sigma) for all layers, separately
+                if kernel_args is None:
+                    kernel_args = [1, 1]
+                    kernel_args_trainable = False
+
+                # initialize the CON layer using all predefined parameters
+                convlayers.append(CONLayer(out_channels_list[i], ref_kmerPos, subsampling=strides[i],
+                                           kernel_func=kernel_func, kernel_args=kernel_args,
+                                           kernel_args_trainable=kernel_args_trainable, **kwargs))
+
+            else:
+                # initialize the "normal" convolutional layers
+                #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
+                convlayers.append(nn.Conv1d(out_channels_list[i-1], out_channels_list[i], kernel_size=filter_sizes[i-1],
+                                            stride=strides[i], padding=paddings[i-1]))
+
+                # perform batch normalization after each conv layer
+                convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
+
+                # use rectifiedLinearUnit as activation function
+                convlayers.append(nn.ReLU(inplace=True))
+
+                # add max pooling
+                convlayers.append(nn.MaxPool1d(kernel_size=filter_sizes[i-1], stride=strides[i]))
+
+        # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
+        self.con_layers = nn.Sequential(*convlayers)
+
+        # initialize the global pooling layer
+        self.global_pool = POOLINGS[global_pool]()
+
+        # set the number of output features
+        #   -> this is the number of output channels of the last CON layer
+        self.out_features = out_channels_list[-1]
+
+        # initialize the classification layer
+        self.initialize_scaler(scaler)
+        self.classifier = LinearMax(self.out_features, num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)

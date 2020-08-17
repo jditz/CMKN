@@ -16,8 +16,9 @@ from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
 
-from con import CON, CONDataset, kmer2dict, build_kmer_ref, compute_metrics, plot_grad_flow, register_hooks
+from con import CON, CONDataset, kmer2dict, build_kmer_ref, compute_metrics, plot_grad_flow, Hook#register_hooks
 
+import matplotlib.pyplot as plt
 from timeit import default_timer as timer
 
 
@@ -179,7 +180,7 @@ def test_exp():
 
     # initialize con model
     model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'],
-                kernel_args_list=[[0.5, 1], [0.5]], kernel_args_trainable=[False, False])
+                kernel_args_list=[[1.25, 1], [0.5]], kernel_args_trainable=[False, False])
     #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
     #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
 
@@ -220,52 +221,65 @@ def test_exp():
             print(name, parameter, "required_grad = {}".format(parameter.requires_grad))
 
         # register forward and backward hooks
-        #hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
-        #hookF.append(Hook(list(list(model._modules.items())[0][1])[1]))
-        #hookF.append(Hook(list(model._modules.items())[1][1]))
-        #hookF.append(Hook(list(model._modules.items())[2][1]))
-        #hookB = [Hook(list(list(model._modules.items())[0][1])[0], backward=True)]
-        #hookB.append(Hook(list(list(model._modules.items())[0][1])[1], backward=True))
-        #hookB.append(Hook(list(model._modules.items())[1][1], backward=True))
-        #hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
+        hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
+        hookF.append(Hook(list(list(model._modules.items())[0][1])[1]))
+        hookF.append(Hook(list(model._modules.items())[1][1]))
+        hookF.append(Hook(list(model._modules.items())[2][1]))
+        hookB = [Hook(list(list(model._modules.items())[0][1])[0], backward=True)]
+        hookB.append(Hook(list(list(model._modules.items())[0][1])[1], backward=True))
+        hookB.append(Hook(list(model._modules.items())[1][1], backward=True))
+        hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
 
         for data, target, *_ in loader_train:
-            with autograd.detect_anomaly():
-                # perform one forward step
-                out = model(data)
+            # with autograd.detect_anomaly():
+            #     # perform one forward step
+            #     out = model(data)
+            #
+            #     # register hooks on the out tensor
+            #     #get_dot = register_hooks(out)
+            #
+            #     # get the dot and save it
+            #     #dot = get_dot()
+            #     #dot.save('tmp.dot')
+            #
+            #     #print(target.shape[1])
+            #
+            #     # backprop to get backward hooks
+            #     #out.backward(target, retain_graph=True)
+            #     loss = criterion(out, target.argmax(1))
+            #     loss.backward()
 
-                # register hooks on the out tensor
-                #get_dot = register_hooks(out)
-
-                # get the dot and save it
-                #dot = get_dot()
-                #dot.save('tmp.dot')
-
-                #print(target.shape[1])
-
-                # backprop to get backward hooks
-                #out.backward(target, retain_graph=True)
-                loss = criterion(out, target.argmax(1))
-                loss.backward()
-
+            out = model(data)
+            loss = criterion(out, target.argmax(1))
+            loss.backward()
             plot_grad_flow(model.named_parameters())
 
             # print hooks
-            #print()
-            #print('***' * 4 + '  Forward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
-            #for hook in hookF:
-            #    try:
-            #        print([x.shape for x in hook.input])#(hook.input)#.shape)
-            #    except:
-            #        print(hook.input[0].shape, hook.input[1:])
-            #    print(hook.output.shape)#.shape)
-            #    print('\n' + '---' * 27 + '\n')
-            #print('\n')
-            #print('***' * 4 + '  Backward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
-            #for hook in hookB:
-            #    print([x.shape for x in hook.input])#(hook.input)#.shape)
-            #    print([x.shape for x in hook.output])#(hook.output)#.shape)
-            #    print('\n' + '---' * 27 + '\n')
+            print()
+            print('***' * 4 + '  Forward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
+            for hook in hookF:
+                try:
+                    print([x.shape for x in hook.input])#(hook.input)#.shape)
+                except:
+                    print(hook.input[0].shape, hook.input[1:])
+                print(hook.output.shape)#.shape)
+                print('\n' + '---' * 27 + '\n')
+            print('\n')
+            print('***' * 4 + '  Backward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
+            for hook in hookB:
+                print([x.shape for x in hook.input])#(hook.input)#.shape)
+                print([x.shape for x in hook.output])#(hook.output)#.shape)
+                print('\n' + '---' * 27 + '\n')
+
+            # print the output of the CON layer as a heatmap
+            print('\nThe correct labels are: {}'.format(target))
+            items = [0, 1, 2, 3]
+            fig, axs = plt.subplots(2, 2)
+            for item, ax in zip(items, axs.ravel()):
+                im = ax.imshow(hookF[0].output[item, :, :].detach().numpy(), cmap='hot', interpolation=None, aspect='auto')
+                ax.set_title("target = %s" % str(target[item, :]))
+                fig.colorbar(im, ax=ax)
+            plt.show()
 
             break
 
