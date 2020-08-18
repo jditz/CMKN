@@ -16,7 +16,7 @@ from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
 
-from con import CON, CONDataset, kmer2dict, build_kmer_ref, compute_metrics, plot_grad_flow, Hook#register_hooks
+from con import CON, CON2, CONDataset, kmer2dict, build_kmer_ref, compute_metrics, plot_grad_flow, Hook# register_hooks
 
 import matplotlib.pyplot as plt
 from timeit import default_timer as timer
@@ -179,10 +179,12 @@ def test_exp():
     ref_pos = build_kmer_ref(filepath, extension, kmer_dict, kmer_size)
 
     # initialize con model
-    model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'],
-                kernel_args_list=[[1.25, 1], [0.5]], kernel_args_trainable=[False, False])
+    #model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'],
+    #            kernel_args_list=[[1.25, 1], [0.5]], kernel_args_trainable=[False, False])
     #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
     #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
+    model = CON2(out_channels_list=[40, 40, 30, 20, 10], ref_kmerPos=ref_pos, filter_sizes=[3, 3, 5, 3],
+                 strides=[1, 3, 3, 5, 3], paddings=['SAME', 'SAME', 'SAME', 'SAME'], num_classes=3)
 
     # load data
     data = CustomHandler(filepath)
@@ -214,6 +216,10 @@ def test_exp():
 
     # DEBUGGING START
     if DEBUGGING:
+
+        model.initialize(loader_train)
+        return
+
         # iterate over all parameter
         print(model)
 

@@ -713,8 +713,8 @@ class CON2(nn.Module):
     """
 
     def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
-                 kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, global_pool='sum',
-                 penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
+                 kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batchNorm=True, dropout=False,
+                 pool='mean', global_pool='sum', penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
         """Constructor of the CON class.
 
         - **Parameters**::
@@ -729,7 +729,7 @@ class CON2(nn.Module):
             :param strides: List of stride factors for each layer
                 :type strides: List of Integer
             :param paddings: List of padding factors for each convolutional layer
-                :type paddings: List of Integer
+                :type paddings: List of String
             :param kernel_funcs: Specifies the kernel function used in the CON layers
                 :type kernel_funcs: String (Default: None)
             :param kernel_args_list: List of arguments for the used kernel.
@@ -741,8 +741,14 @@ class CON2(nn.Module):
                 :type alpha: Float
             :param fit_bias: Indicates whether the bias of the classification layer should be fitted
                 :type fit_bias: Boolean (Default: True)
+            :param batchNorm: Indicates whether batch normalization should be used for convolutional layers.
+                :type batchNorm: Boolean (Default: True)
+            :param dropout: Indicates whether Dropout should be used for convolutional layers.
+                :type dropout: Boolean (Default: False)
+            :param pool: Indicates the pooling layer used after each convolutional layer
+                :type pool: String (Default: 'mean')
             :param global_pool: Indicates which method should be used for global pooling
-                :type global_pool: String (Default: 'mean')
+                :type global_pool: String (Default: 'sum')
             :param penalty: Indicates which penalty method should be used
                 :type penalty: String (Default: 'l2')
             :param scaler: Specifies which scaler will be used
@@ -757,12 +763,17 @@ class CON2(nn.Module):
 
         # out_channels_list, filter_sizes, and subsamplings have to be of same length
         #   -> therefore, raise an AssertionError if the lengths differ
-        if not len(out_channels_list) == len(filter_sizes) + 1 == len(subsamplings):
+        if not len(out_channels_list) == len(strides) == len(filter_sizes) + 1 == len(paddings) + 1:
             raise ValueError('Incompatible dimensions! \n'
-                             '            out_channels_list, filter_sizes, and subsamplings have to be of same length.')
+                             '            out_channels_list and strides have to be of same length while filter_sizes '
+                             'and paddings have to be one entry shorter than the other two.')
 
         # initialize parent class
         super(CON2, self).__init__()
+
+        # auxiliary variable to map the pooling choice onto a PyTorch layer
+        poolings = {'mean': nn.AvgPool1d, 'max': nn.MaxPool1d, 'lpp': nn.LPPool1d, 'adaMax': nn.AdaptiveMaxPool1d,
+                    'adaMean': nn.AdaptiveAvgPool1d}
 
         # store the length of sequences used as input to this network
         self.seq_len = ref_kmerPos.size(1)
@@ -770,7 +781,7 @@ class CON2(nn.Module):
 
         # initialize the convolutional oligo kernel layer and all additional "normal" convolutional layers
         convlayers = []
-        for i in len(out_channels_list):
+        for i in range(len(out_channels_list)):
             # first layer will always be a convolutional oligo kernel layer
             if i == 0:
                 # set the kernel function for all layers separately
@@ -788,22 +799,33 @@ class CON2(nn.Module):
                                            kernel_args_trainable=kernel_args_trainable, **kwargs))
 
             else:
+                # set padding parameter dependent on the selected padding type
+                if paddings[i-1] == "SAME":
+                    padding = (filter_sizes[i-1] - 1) // 2
+                else:
+                    padding = 0
+
                 # initialize the "normal" convolutional layers
                 #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
                 convlayers.append(nn.Conv1d(out_channels_list[i-1], out_channels_list[i], kernel_size=filter_sizes[i-1],
-                                            stride=strides[i], padding=paddings[i-1]))
+                                            stride=strides[i], padding=padding))
 
-                # perform batch normalization after each conv layer
-                convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
+                # perform batch normalization after each conv layer (if set to True)
+                if batchNorm:
+                    convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
 
                 # use rectifiedLinearUnit as activation function
                 convlayers.append(nn.ReLU(inplace=True))
 
+                # use dropout after each conv layer (if set to True)
+                if dropout:
+                    convlayers.append(nn.Dropout())
+
                 # add max pooling
-                convlayers.append(nn.MaxPool1d(kernel_size=filter_sizes[i-1], stride=strides[i]))
+                convlayers.append(poolings[pool](kernel_size=filter_sizes[i-1], stride=strides[i]))
 
         # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
-        self.con_layers = nn.Sequential(*convlayers)
+        self.con_model = nn.Sequential(*convlayers)
 
         # initialize the global pooling layer
         self.global_pool = POOLINGS[global_pool]()
@@ -815,3 +837,163 @@ class CON2(nn.Module):
         # initialize the classification layer
         self.initialize_scaler(scaler)
         self.classifier = LinearMax(self.out_features, num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
+
+    def initialize_scaler(self, scaler=None):
+        pass
+
+    def normalize_(self):
+        """ Function to normalize the weights of  the convolutional oligo kernel layer
+        """
+        self.con_model[0].normalize_()
+
+    def forward(self, input, proba=False):
+        """ Overwritten forward function for CON objects
+
+        - **Parameters**::
+            :param input: Input to the CONSequential object
+                :type input: Tensor
+            :param proba: Indicates whether the network should produce probabilistic output
+                :type proba: Boolean
+
+        - **Returns**::
+
+            :return: Evaluation of the input
+        """
+
+        output = self.con_model(input)
+        output = self.global_pool(output)
+        return self.classifier(output, proba)
+
+    def unsup_train_classifier(self, data_loader, criterion=None, use_cuda=False):
+        """ This function initializes the classification layer in an unsupervised fashion
+
+        - **Parameters**::
+
+            :param data_loader: PyTorch DataLoader that handles data
+                :type data_loader: torch.utils.data.DataLoader
+            :param criterion: Specifies the loss function. If set to None, torch.nn.BCEWithLogitsLoss() will be used.
+                :type criterion: PyTorch Loss function (e.g. torch.nn.L1Loss)
+            :param use_cuda: Specified whether all computations will be performed on the GPU
+                :type use_cuda: Boolean
+        """
+        # perform an initial prediction using the network
+        encoded_train, encoded_target = self.predict(data_loader, True, use_cuda=use_cuda)
+
+        # check if a scaler was defined and not yet fitted
+        if hasattr(self, 'scaler') and not self.scaler.fitted:
+            self.scaler.fitted = True
+            size = encoded_train.shape[0]
+            # fit the scaler
+            encoded_train = self.scaler.fit_transform(encoded_train.view(-1, self.out_features)).view(size, -1)
+
+        # fit the classification layer with the initial prediction
+        self.classifier.fit(encoded_train, encoded_target, criterion)
+
+    def predict(self, data_loader, use_cuda=False):
+        """ CON2 prediction function used during the unsupervised initialization of the classification layer.
+
+        - **Parameters**::
+
+            :param data_loader: PyTorch DataLoader that handles data
+                :type data_loader: torch.utils.data.DataLoader
+            :param use_cuda: Specified whether all computations will be performed on the GPU
+                :type use_cuda: Boolean
+
+        - **Returns**::
+
+            :return output:
+            :return target_output:
+        """
+        # set training mode of the model to False
+        self.train(False)
+
+        # move model either to CPU or GPU
+        if use_cuda:
+            self.cuda()
+
+        # detect the number of samples that will be classified and initialize tensor that stores the targets of each
+        # sample
+        n_samples = len(data_loader.dataset)
+
+        # iterate over all samples
+        batch_start = 0
+        for i, (data, target, *_) in enumerate(data_loader):
+            batch_size = data.shape[0]
+
+            # transfer sample data to GPU if computations are performed there
+            if use_cuda:
+                data = data.cuda()
+
+            # do not keep track of the gradients during the forward propagation
+            with torch.no_grad():
+                batch_out = self.con_model(data)
+                batch_out = self.global_pool(batch_out).data().cpu()
+
+            # combine the result of the forward propagation
+            #batch_out = torch.cat((batch_out[:batch_size], batch_out[batch_size:]), dim=-1)
+
+            # initialize tensor that holds the results of the forward propagation for each sample
+            if i == 0:
+                output = torch.Tensor(n_samples, batch_out.shape[-1])
+                target_output = torch.Tensor(n_samples, target.shape[-1])
+
+            # update output and target_output tensor with the current results
+            output[batch_start:batch_start + batch_size] = batch_out
+            target_output[batch_start:batch_start + batch_size] = target
+
+            # continue with the next batch
+            batch_start += batch_size
+
+        # return the forward propagation results and the real targets
+        output.squeeze_(-1)
+        return output, target_output
+
+    def initialize(self):
+        """ Function to initialize parameters of the network
+        """
+
+        # iterate over all convolutional layers
+        for i, layer in enumerate(self.con_model):
+
+            # initialize the convolutional oligo kernel layer
+            if i == 0:
+                print("Initializing layer {} (oligo kernel layer)...".format(i))
+
+                # initialize the anchor points of the CON layer in an unsupervised fashion
+                layer.unsup_train(self.seq_len)
+
+            # initialize "normal" convolution layers
+            elif 'Conv1d' in str(layer):
+                print("Initializing layer {} (conv layer)...".format(i))
+
+                # initializing weights using the He initialization (also called Kaiming initialization)
+                #   -> only use this initialization if ReLU activation is used
+                nn.init.kaiming_uniform_(layer.weight, mode='fan_in', nonlinearity='relu')
+
+    def sup_train(self, train_loader, criterion, optimizer, lr_scheduler=None, epochs=100, val_loader=None,
+                  use_cuda=False, early_stop=True):
+        """ Perform supervised training of the CON model
+
+        - **Parameters**::
+
+            :param train_loader: PyTorch DataLoader that handles data
+                :type train_loader: torch.utils.data.DataLoader
+            :param criterion: Specifies the loss function.
+                :type criterion: PyTorch Loss function (e.g. torch.nn.L1Loss)
+            :param optimizer: Optimization algorithm used during training
+                :type optimizer: PyTorch Optimizer (e.g. torch.optim.Adam)
+            :param lr_scheduler: Algorithm used for learning rate adjustment
+                :type lr_scheduler: PyTorch LR Scheduler (e.g. torch.optim.lr_scheduler.LambdaLR) (Default: None)
+            :param epochs: Number of epochs during training
+                :type epochs: Integer (Default: 100)
+            :param val_loader: PyTorch DataLoader that handles data during the validation phase
+                :type val_loader: torch.utils.data.DataLoader (Default: None)
+            :param use_cuda: Specified whether all computations will be performed on the GPU
+                :type use_cuda: Boolean (Default: False)
+            :param early_stop: Specifies if early stopping will be used during training
+                :type early_stop: Boolean (Default: True)
+
+        - **Returns**::
+
+            :return trained model
+        """
