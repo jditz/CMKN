@@ -16,14 +16,15 @@ from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
 
-from con import CON, CON2, CONDataset, kmer2dict, build_kmer_ref, compute_metrics, plot_grad_flow, Hook# register_hooks
+from con import (CON, CON2, CONDataset, kmer2dict, build_kmer_ref, category_from_output, compute_metrics,
+                 plot_grad_flow, Hook)# register_hooks
 
 import matplotlib.pyplot as plt
 from timeit import default_timer as timer
 
 
 # MACROS
-DEBUGGING = True
+DEBUGGING = False
 
 
 name = 'example_experiment'
@@ -183,8 +184,8 @@ def test_exp():
     #            kernel_args_list=[[1.25, 1], [0.5]], kernel_args_trainable=[False, False])
     #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
     #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
-    model = CON2(out_channels_list=[40, 40, 30, 20, 10], ref_kmerPos=ref_pos, filter_sizes=[3, 3, 5, 3],
-                 strides=[1, 3, 3, 5, 3], paddings=['SAME', 'SAME', 'SAME', 'SAME'], num_classes=3)
+    model = CON2(out_channels_list=[40, 32, 64, 128, 512], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5],
+                 strides=[1, 1, 2, 2, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME'], num_classes=3)
 
     # load data
     data = CustomHandler(filepath)
@@ -205,7 +206,7 @@ def test_exp():
     train_sampler = SubsetRandomSampler(train_indices)
     val_sampler = SubsetRandomSampler(val_indices)
 
-    loader_train = DataLoader(data, batch_size=4, sampler=train_sampler)
+    loader_train = DataLoader(data, batch_size=1, sampler=train_sampler)
     loader_val = DataLoader(data, batch_size=4, sampler=val_sampler)
 
     # initialize optimizer and loss function
@@ -217,25 +218,25 @@ def test_exp():
     # DEBUGGING START
     if DEBUGGING:
 
-        model.initialize(loader_train)
-        return
-
         # iterate over all parameter
         print(model)
+        model.initialize()
 
-        for name, parameter in model.named_parameters():
-            print(name, parameter, "required_grad = {}".format(parameter.requires_grad))
+        #for name, parameter in model.named_parameters():
+        #    print(name, parameter, "required_grad = {}".format(parameter.requires_grad))
 
         # register forward and backward hooks
-        hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
-        hookF.append(Hook(list(list(model._modules.items())[0][1])[1]))
-        hookF.append(Hook(list(model._modules.items())[1][1]))
-        hookF.append(Hook(list(model._modules.items())[2][1]))
-        hookB = [Hook(list(list(model._modules.items())[0][1])[0], backward=True)]
-        hookB.append(Hook(list(list(model._modules.items())[0][1])[1], backward=True))
-        hookB.append(Hook(list(model._modules.items())[1][1], backward=True))
-        hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
+        # hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
+        # hookF.append(Hook(list(list(model._modules.items())[0][1])[1]))
+        # hookF.append(Hook(list(model._modules.items())[1][1]))
+        # hookF.append(Hook(list(model._modules.items())[2][1]))
+        # hookB = [Hook(list(list(model._modules.items())[0][1])[0], backward=True)]
+        # hookB.append(Hook(list(list(model._modules.items())[0][1])[1], backward=True))
+        # hookB.append(Hook(list(model._modules.items())[1][1], backward=True))
+        # hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
 
+        running_loss = 0.0
+        running_corrects = 0
         for data, target, *_ in loader_train:
             # with autograd.detect_anomaly():
             #     # perform one forward step
@@ -255,46 +256,63 @@ def test_exp():
             #     loss = criterion(out, target.argmax(1))
             #     loss.backward()
 
-            out = model(data)
-            loss = criterion(out, target.argmax(1))
-            loss.backward()
-            plot_grad_flow(model.named_parameters())
+            # simulate epochs for a single data point
+            for i in range(10):
+                out = model(data)
+
+                pred = torch.zeros(out.shape)
+                for i in range(out.shape[0]):
+                    pred[i, category_from_output(out[i, :])] = 1
+
+                loss = criterion(out, target.argmax(1))
+                loss.backward()
+                optimizer.step()
+                model.normalize_()
+                plot_grad_flow(model.named_parameters())
+
+                running_loss += loss.item() * data.size(0)
+                running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
+                                              torch.ones(pred.shape[0]) * pred.shape[1]).item()
+                print(running_loss, running_corrects)
+
+            return
 
             # print hooks
-            print()
-            print('***' * 4 + '  Forward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
-            for hook in hookF:
-                try:
-                    print([x.shape for x in hook.input])#(hook.input)#.shape)
-                except:
-                    print(hook.input[0].shape, hook.input[1:])
-                print(hook.output.shape)#.shape)
-                print('\n' + '---' * 27 + '\n')
-            print('\n')
-            print('***' * 4 + '  Backward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
-            for hook in hookB:
-                print([x.shape for x in hook.input])#(hook.input)#.shape)
-                print([x.shape for x in hook.output])#(hook.output)#.shape)
-                print('\n' + '---' * 27 + '\n')
+            # print()
+            # print('***' * 4 + '  Forward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
+            # for hook in hookF:
+            #     try:
+            #         print([x.shape for x in hook.input])#(hook.input)#.shape)
+            #     except:
+            #         print(hook.input[0].shape, hook.input[1:])
+            #     print(hook.output.shape)#.shape)
+            #     print('\n' + '---' * 27 + '\n')
+            # print('\n')
+            # print('***' * 4 + '  Backward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
+            # for hook in hookB:
+            #     print([x.shape for x in hook.input])#(hook.input)#.shape)
+            #     print([x.shape for x in hook.output])#(hook.output)#.shape)
+            #     print('\n' + '---' * 27 + '\n')
+            #
+            # # print the output of the CON layer as a heatmap
+            # print('\nThe correct labels are: {}'.format(target))
+            # items = [0, 1, 2, 3]
+            # fig, axs = plt.subplots(2, 2)
+            # for item, ax in zip(items, axs.ravel()):
+            #     im = ax.imshow(hookF[0].output[item, :, :].detach().numpy(), cmap='hot', interpolation=None, aspect='auto')
+            #     ax.set_title("target = %s" % str(target[item, :]))
+            #     fig.colorbar(im, ax=ax)
+            # plt.show()
 
-            # print the output of the CON layer as a heatmap
-            print('\nThe correct labels are: {}'.format(target))
-            items = [0, 1, 2, 3]
-            fig, axs = plt.subplots(2, 2)
-            for item, ax in zip(items, axs.ravel()):
-                im = ax.imshow(hookF[0].output[item, :, :].detach().numpy(), cmap='hot', interpolation=None, aspect='auto')
-                ax.set_title("target = %s" % str(target[item, :]))
-                fig.colorbar(im, ax=ax)
-            plt.show()
-
-            break
+        print("initial loss: {}".format(running_loss / len(loader_train.dataset)))
+        print("initial accuracy: {}".format(running_corrects / len(loader_train.dataset)))
 
         return
 
     # DEBUGGING END
 
     # train model
-    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=5)
+    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=20)
 
     # iterate through dataset
     #for i_batch, sample_batch in enumerate(loader):
@@ -304,7 +322,7 @@ def test_exp():
 
     # perform "testing" using the validation data point (only for debugging purpose)
     y_pred, y_true = model.predict(loader_val, proba=True)
-    scores = sum(y_pred == y_true) / len(y_pred)
+    scores = torch.sum(torch.sum(y_pred == y_true, 1) == torch.ones(y_pred.shape[0]) * y_true.shape[1]).item()
 
     # compute_metrics might only work for binary classification
     #scores = compute_metrics(y_pred, y_true)

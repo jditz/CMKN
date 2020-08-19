@@ -14,6 +14,7 @@ from timeit import default_timer as timer
 import copy
 
 from .layers import POOLINGS, CONLayer, CKNLayer, LinearMax
+from .utils import category_from_output
 
 
 class CONSequential(nn.Module):
@@ -594,7 +595,7 @@ class CON(nn.Module):
             # set the models train mode to False
             self.train(False)
 
-            # for each epoch, initialize the classification layer in an unsupervised fashion
+            # for each epoch, calculate a new fit for the linear classifier using the current state of the model
             self.unsup_train_classifier(train_loader, criterion, use_cuda=use_cuda)
 
             # iterate over all phases of the training process
@@ -714,7 +715,7 @@ class CON2(nn.Module):
 
     def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
                  kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batchNorm=True, dropout=False,
-                 pool='mean', global_pool='sum', penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
+                 pool='mean', global_pool='mean', penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
         """Constructor of the CON class.
 
         - **Parameters**::
@@ -726,7 +727,7 @@ class CON2(nn.Module):
                 :type ref_kmerPos: Tensor (number of kmers x length of sequence)
             :param filter_sizes: Size of the filter for each layer
                 :type filter_sizes: List of Integer
-            :param strides: List of stride factors for each layer
+            :param strides: List of stride factors for each pooling layer
                 :type strides: List of Integer
             :param paddings: List of padding factors for each convolutional layer
                 :type paddings: List of String
@@ -784,11 +785,11 @@ class CON2(nn.Module):
         for i in range(len(out_channels_list)):
             # first layer will always be a convolutional oligo kernel layer
             if i == 0:
-                # set the kernel function for all layers separately
+                # set the default kernel function if none was specified
                 if kernel_func is None:
                     kernel_func = "exp"
 
-                # set the kernel hyperparameter (e.g. sigma) for all layers, separately
+                # set the default kernel hyper-parameters (e.g. sigma) if none were specified
                 if kernel_args is None:
                     kernel_args = [1, 1]
                     kernel_args_trainable = False
@@ -808,7 +809,7 @@ class CON2(nn.Module):
                 # initialize the "normal" convolutional layers
                 #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
                 convlayers.append(nn.Conv1d(out_channels_list[i-1], out_channels_list[i], kernel_size=filter_sizes[i-1],
-                                            stride=strides[i], padding=padding))
+                                            stride=1, padding=padding))
 
                 # perform batch normalization after each conv layer (if set to True)
                 if batchNorm:
@@ -836,7 +837,8 @@ class CON2(nn.Module):
 
         # initialize the classification layer
         self.initialize_scaler(scaler)
-        self.classifier = LinearMax(self.out_features, num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
+        #self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
+        self.classifier = nn.Linear(self.out_features, self.num_classes, fit_bias)
 
     def initialize_scaler(self, scaler=None):
         pass
@@ -862,7 +864,11 @@ class CON2(nn.Module):
 
         output = self.con_model(input)
         output = self.global_pool(output)
-        return self.classifier(output, proba)
+        output = self.classifier(output)
+        if proba:
+            return output.sigmoid()
+        else:
+            return output
 
     def unsup_train_classifier(self, data_loader, criterion=None, use_cuda=False):
         """ This function initializes the classification layer in an unsupervised fashion
@@ -889,20 +895,24 @@ class CON2(nn.Module):
         # fit the classification layer with the initial prediction
         self.classifier.fit(encoded_train, encoded_target, criterion)
 
-    def predict(self, data_loader, use_cuda=False):
-        """ CON2 prediction function used during the unsupervised initialization of the classification layer.
+    def predict(self, data_loader, only_representation=False, proba=False, use_cuda=False):
+        """ CON2 prediction function
 
         - **Parameters**::
 
             :param data_loader: PyTorch DataLoader that handles data
                 :type data_loader: torch.utils.data.DataLoader
+            :param only_representation:
+                :type only_representation: Boolean
+            :param proba: Indicates whether the network should produce probabilistic output
+                :type proba: Boolean
             :param use_cuda: Specified whether all computations will be performed on the GPU
                 :type use_cuda: Boolean
 
         - **Returns**::
 
-            :return output:
-            :return target_output:
+            :return output: Result of the forward propagation without the classification layer
+            :return target_output: Real labels of the input data
         """
         # set training mode of the model to False
         self.train(False)
@@ -926,8 +936,11 @@ class CON2(nn.Module):
 
             # do not keep track of the gradients during the forward propagation
             with torch.no_grad():
-                batch_out = self.con_model(data)
-                batch_out = self.global_pool(batch_out).data().cpu()
+                if only_representation:
+                    batch_out = self.con_model(data)
+                    batch_out = self.global_pool(batch_out).data.cpu()
+                else:
+                    batch_out = self(data, proba).data.cpu()
 
             # combine the result of the forward propagation
             #batch_out = torch.cat((batch_out[:batch_size], batch_out[batch_size:]), dim=-1)
@@ -963,7 +976,7 @@ class CON2(nn.Module):
                 layer.unsup_train(self.seq_len)
 
             # initialize "normal" convolution layers
-            elif 'Conv1d' in str(layer):
+            elif isinstance(layer, nn.Conv1d):
                 print("Initializing layer {} (conv layer)...".format(i))
 
                 # initializing weights using the He initialization (also called Kaiming initialization)
@@ -997,3 +1010,164 @@ class CON2(nn.Module):
 
             :return trained model
         """
+
+        print("Initializing CON layers")
+        tic = timer()
+
+        # initialize the anchor points of all layers that use anchor points in an unsupervised fashion and initialize
+        # weights of all convolutional layers
+        self.initialize()
+
+        toc = timer()
+        print("Finished, elapsed time: {:.2f}min".format((toc - tic) / 60))
+
+        # specify the data used for each phase
+        #   -> ATTENTION: a validation phase only exists if val_loader is not None
+        phases = ['train']
+        data_loader = {'train': train_loader}
+        if val_loader is not None:
+            phases.append('val')
+            data_loader['val'] = val_loader
+
+        # initialize variables to keep track of the epoch's loss, the best loss, and the best accuracy
+        epoch_loss = None
+        best_loss = float('inf')
+        best_acc = 0
+
+        # iterate over all epochs
+        for epoch in range(epochs):
+            print('Epoch {}/{}'.format(epoch + 1, epochs))
+            print('-' * 10)
+
+            # set the models train mode to False
+            self.train(False)
+
+            # for each epoch, calculate a new fit for the linear classifier using the current state of the model
+            #self.unsup_train_classifier(train_loader, criterion, use_cuda=use_cuda)
+
+            # iterate over all phases of the training process
+            for phase in phases:
+
+                # if the current phase is 'train', set model's train mode to True and initialize the Learning Rate
+                # Scheduler (if one was specified)
+                if phase == 'train':
+                    if lr_scheduler is not None:
+
+                        # if the learning rate scheduler is 'ReduceLROnPlateau' and there is a current loss, the next
+                        # lr step needs the current loss as input
+                        if isinstance(lr_scheduler, ReduceLROnPlateau):
+                            if epoch_loss is not None:
+                                lr_scheduler.step(epoch_loss)
+
+                        # otherwise call the step() function of the learning rate scheduler
+                        else:
+                            lr_scheduler.step()
+
+                        # print the current learning rate
+                        print("current LR: {}".format(optimizer.param_groups[0]['lr']))
+
+                    # set model's train mode to True
+                    self.train(True)
+
+                # if the current phase is not 'train', set the model's train mode to False. In this case, the learning
+                # rate is irrelevant.
+                else:
+                    self.train(False)
+
+                # initialize variables to keep track of the loss and the number of correctly classified samples in the
+                # current epoch
+                running_loss = 0.0
+                running_corrects = 0
+
+                # iterate over the data that will be used in the current phase
+                for data, target, *_ in data_loader[phase]:
+                    size = data.size(0)
+                    target = target.float()
+
+                    # if the computations take place on the GPU, send data to GPU
+                    if use_cuda:
+                        data = data.cuda()
+                        target = target.cuda()
+
+                    # zero the parameter gradients
+                    optimizer.zero_grad()
+
+                    # forward propagation through the model
+                    #   -> do not keep track of the gradients if we are in the validation phase
+                    if phase == 'val':
+                        with torch.no_grad():
+                            output = self(data)
+
+                            # create prediction tensor
+                            if self.num_classes > 2:
+                                pred = torch.zeros(output.shape)
+                                for i in range(output.shape[0]):
+                                    pred[i, category_from_output(output[i, :])] = 1
+                            else:
+                                pred = (output.data > 0).float()
+
+                            # multiclass prediction needs special call of loss function
+                            if self.num_classes > 2:
+                                loss = criterion(output, target.argmax(1))
+                            else:
+                                loss = criterion(output, target)
+                    else:
+                        output = self(data)
+
+                        # create prediction tensor
+                        if self.num_classes > 2:
+                            pred = torch.zeros(output.shape)
+                            for i in range(output.shape[0]):
+                                pred[i, category_from_output(output[i, :])] = 1
+                        else:
+                            pred = (output.data > 0).float()
+
+                        # multiclass prediction needs special call of loss function
+                        if self.num_classes > 2:
+                            loss = criterion(output, target.argmax(1))
+                        else:
+                            loss = criterion(output, target)
+
+                    # backward propagate + optimize only if in training phase
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+                        self.normalize_()
+
+                    # update statistics
+                    running_loss += loss.item() * size
+                    if self.num_classes > 2:
+                        running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
+                                                      torch.ones(pred.shape[0]) * self.num_classes).item()
+                    else:
+                        running_corrects += torch.sum(pred == target.data).item()
+
+                # calculate loss and accuracy in the current epoch
+                epoch_loss = running_loss / len(data_loader[phase].dataset)
+                epoch_acc = running_corrects / len(data_loader[phase].dataset)
+
+                # print the statistics of the current epoch
+                print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
+
+                # deep copy the model
+                if (phase == 'val') and epoch_loss < best_loss:
+                    best_acc = epoch_acc
+                    best_loss = epoch_loss
+
+                    # store model parameters only if the generalization error improved (i.e. early stopping)
+                    if early_stop:
+                        best_weights = copy.deepcopy(self.state_dict())
+
+            print()
+
+        # report training results
+        print('Finish at epoch: {}'.format(epoch + 1))
+        print('Best val Acc: {:4f}'.format(best_acc))
+        print('Best val loss: {:4f}'.format(best_loss))
+
+        # if early stopping is enabled, make sure that the parameters are used, which resulted in the best
+        # generalization error
+        if early_stop:
+            self.load_state_dict(best_weights)
+
+        return self

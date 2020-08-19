@@ -104,8 +104,21 @@ def kmer2dict(kmer_size, alphabet):
 
 
 def build_kmer_ref(filepath, extension, kmer_dict, kmer_size):
-    """
+    """Utility to create reference k-mere positions
 
+    This function uses a specified training set of sequences and creates a tensor that stores for each position the
+    frequency of k-mers (k = kmer_size) starting at that position.
+
+    - **Parameters**::
+
+        :param filepath: Path to the file that contains the dataset
+            :type filepath: String
+        :param extension: Extension of the dataset file (needed for Biopython's SeqIO routine)
+            :type extension: String
+        :param kmer_dict: Dictionary mapping each k-mer to an integer.
+            :type kmer_dict: dictionary
+        :param kmer_size: Size of the k-mers (k = kmer_size).
+            :type kmer_size: Integer
     """
     # get the length of the sequences in the dataset by first reading only the first entry
     first_record = next(SeqIO.parse(filepath, extension))
@@ -131,7 +144,7 @@ def build_kmer_ref(filepath, extension, kmer_dict, kmer_size):
                 for p in pos:
                     ref_pos[i, p] += 1
 
-    # devide every entry in the ref position tensor by the size of the dataset
+    # divide every entry in the ref position tensor by the size of the dataset
     return ref_pos / data_size
 
 
@@ -158,7 +171,7 @@ def category_from_output(output):
 def gaussian_filter_1d(size, sigma=None):
     """1D Gaussian filter
 
-    This function creates a 1D Gaussian filter used for pooling in a CON layer.
+    This function creates a 1D Gaussian filter mask used for pooling in a CKN layer.
 
     - **Parameters**::
 
@@ -192,10 +205,13 @@ def normalize_(x, p=2, dim=-1):
 
     Auxiliary function implementing numerically stable matrix normalization.
 
-    :param x: Input matrix
-    :param p:
-    :param dim:
-    :return:
+    :param x: Input tensor
+    :param p: Indicates the order of the norm
+    :param dim: If it is an int, vector norm will be calculated, if it is 2-tuple of ints, matrix norm will be
+                calculated. If the value is None, matrix norm will be calculated when the input tensor only has two
+                dimensions, vector norm will be calculated when the input tensor only has one dimension. If the input
+                tensor has more than two dimensions, the vector norm will be applied to last dimension.
+    :return: Normalized input tensor
     """
     norm = x.norm(p=p, dim=dim, keepdim=True)
     x.div_(norm.clamp(min=EPS))
@@ -545,9 +561,13 @@ def register_hooks(var):
 
 
 # A simple hook class that returns the input and output of a layer during forward/backward pass
-class Hook():
+class Hook:
     def __init__(self, module, backward=False):
-        if backward==False:
+        # initialize parameters
+        self.input = None
+        self.output = None
+
+        if not backward:
             self.hook = module.register_forward_hook(self.hook_fn)
         else:
             self.hook = module.register_backward_hook(self.hook_fn)
@@ -561,11 +581,12 @@ class Hook():
 
 
 def plot_grad_flow(named_parameters):
-    '''Plots the gradients flowing through different layers in the net during training.
+    """Plots the gradients flowing through different layers in the net during training.
     Can be used for checking for possible gradient vanishing / exploding problems.
 
     Usage: Plug this function in Trainer class after loss.backwards() as
-    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
+    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow
+    """
     ave_grads = []
     max_grads = []
     layers = []

@@ -18,6 +18,9 @@ class KmerTestCase(unittest.TestCase):
         self.sequence = 'aatctcagcgggcatcgatcggctaaagcga'
         self.alphabet = ['c', 'g', 't', 'a']
         self.kmer_size = 3
+
+        # set up test parameters for the test in this TestCase
+        #   -> these variables will be used to assess whether functions work correctly
         self.test_dict = {'ccc': 0, 'ccg': 1, 'cct': 2, 'cca': 3, 'cgc': 4, 'cgg': 5, 'cgt': 6, 'cga': 7, 'ctc': 8,
                           'ctg': 9, 'ctt': 10, 'cta': 11, 'cac': 12, 'cag': 13, 'cat': 14, 'caa': 15, 'gcc': 16,
                           'gcg': 17, 'gct': 18, 'gca': 19, 'ggc': 20, 'ggg': 21, 'ggt': 22, 'gga': 23, 'gtc': 24,
