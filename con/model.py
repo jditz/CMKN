@@ -9,6 +9,7 @@ import sys
 import torch
 from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch.nn.functional as F
 import numpy as np
 from timeit import default_timer as timer
 import copy
@@ -866,7 +867,13 @@ class CON2(nn.Module):
         output = self.global_pool(output)
         output = self.classifier(output)
         if proba:
-            return output.sigmoid()
+            # activate with sigmoid function only for binary classification
+            if self.num_classes == 2:
+                return output.sigmoid()
+
+            # activate with log softmax function for multi-class classification
+            else:
+                return F.log_softmax(output, dim=1)
         else:
             return output
 
@@ -1019,7 +1026,7 @@ class CON2(nn.Module):
         self.initialize()
 
         toc = timer()
-        print("Finished, elapsed time: {:.2f}min".format((toc - tic) / 60))
+        print("Finished, elapsed time: {:.2f}min\n".format((toc - tic) / 60))
 
         # specify the data used for each phase
         #   -> ATTENTION: a validation phase only exists if val_loader is not None
@@ -1036,6 +1043,7 @@ class CON2(nn.Module):
 
         # iterate over all epochs
         for epoch in range(epochs):
+            tic = timer()
             print('Epoch {}/{}'.format(epoch + 1, epochs))
             print('-' * 10)
 
@@ -1158,7 +1166,8 @@ class CON2(nn.Module):
                     if early_stop:
                         best_weights = copy.deepcopy(self.state_dict())
 
-            print()
+            toc = timer()
+            print("Finished, elapsed time: {:.2f}min\n".format((toc - tic) / 60))
 
         # report training results
         print('Finish at epoch: {}'.format(epoch + 1))

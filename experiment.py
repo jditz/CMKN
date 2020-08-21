@@ -11,8 +11,9 @@ import argparse
 from torch.utils.data import DataLoader
 import torch
 from torch import nn, autograd
-from torch.utils.data.sampler import SubsetRandomSampler
+from torch.utils.data import Subset
 from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
+from torch.autograd import gradcheck
 import torch.optim as optim
 import numpy as np
 
@@ -21,10 +22,12 @@ from con import (CON, CON2, CONDataset, kmer2dict, build_kmer_ref, category_from
 
 import matplotlib.pyplot as plt
 from timeit import default_timer as timer
+from Bio import SeqIO
 
 
 # MACROS
-DEBUGGING = False
+DEBUGGING = True
+DEBUG_STEPS = [False, True, False, False, True]
 
 
 name = 'example_experiment'
@@ -168,10 +171,12 @@ def load_args():
 
 def test_exp():
     # set parameters for the test run
+    #filepath = './data/processed_PI_DataSet_sample_labels_clean.fasta'
     filepath = './data/test_dataset.fasta'
     extension = 'fasta'
     kmer_size = 3
     alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
+    nb_epochs = 10
 
     # create dictionary that maps kmers to index
     kmer_dict = kmer2dict(kmer_size, alphabet)
@@ -184,17 +189,18 @@ def test_exp():
     #            kernel_args_list=[[1.25, 1], [0.5]], kernel_args_trainable=[False, False])
     #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
     #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
-    model = CON2(out_channels_list=[40, 32, 64, 128, 512], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5],
-                 strides=[1, 1, 2, 2, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME'], num_classes=3)
+    model = CON2(out_channels_list=[40, 32, 64, 128, 512, 1024], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5, 10],
+                 strides=[1, 1, 1, 1, 1, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME', 'SAME'], num_classes=3)
+    #model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3)
 
     # load data
-    data = CustomHandler(filepath)
+    data_all = CustomHandler(filepath)
 
     # Creating data indices for training and validation splits:
     validation_split = .2
     shuffle_dataset = True
     random_seed = 42
-    dataset_size = len(data)
+    dataset_size = len(data_all)
     indices = list(range(dataset_size))
     split = int(np.floor(validation_split * dataset_size))
     if shuffle_dataset:
@@ -203,27 +209,80 @@ def test_exp():
     train_indices, val_indices = indices[split:], indices[:split]
 
     # Creating PyTorch data samplers and loaders:
-    train_sampler = SubsetRandomSampler(train_indices)
-    val_sampler = SubsetRandomSampler(val_indices)
+    data_train = Subset(data_all, train_indices)
+    data_val = Subset(data_all, val_indices)
 
-    loader_train = DataLoader(data, batch_size=1, sampler=train_sampler)
-    loader_val = DataLoader(data, batch_size=4, sampler=val_sampler)
+    loader_train = DataLoader(data_train, batch_size=4)
+    loader_val = DataLoader(data_val, batch_size=4)
 
     # initialize optimizer and loss function
     #criterion = nn.BCEWithLogitsLoss()
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.con_model.parameters(), lr=0.1)
+    optimizer = optim.Adam(model.parameters(), lr=0.1)
     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
     # DEBUGGING START
     if DEBUGGING:
 
-        # iterate over all parameter
-        print(model)
-        model.initialize()
+        # STEP 1: Print the model and trainable parameters
+        if DEBUG_STEPS[0]:
+            print("\n\n********* DEBUGGING STEP 1 *********\n    -> print the model and parameters\n")
+            print(model)
+            for name, parameter in model.named_parameters():
+                print(name, parameter.shape, "required_grad = {}".format(parameter.requires_grad))
 
-        #for name, parameter in model.named_parameters():
-        #    print(name, parameter, "required_grad = {}".format(parameter.requires_grad))
+        # STEP 2: check the initial loss
+        if DEBUG_STEPS[1]:
+            print("\n\n********* DEBUGGING STEP 2 *********\n    -> check initial loss of the model\n" +
+                  "    -> initial loss should be close to expected loss\n")
+            model.initialize()
+            running_loss = 0
+            for data, target, *_ in loader_train:
+                out = model(data)
+                loss = criterion(out, target.argmax(1))
+                running_loss += loss.item() * data.size(0)
+            init_loss = running_loss / len(loader_train.dataset)
+            print("\ninitial loss: {}; expected loss: {}".format(init_loss, 1.1086626245216111))
+
+        # STEP 3: train model on a single data point and see if it can overfit
+        if DEBUG_STEPS[2]:
+            print("\n\n********* DEBUGGING STEP 3 *********\n    -> train model on a single datapoint\n" +
+                  "    -> model has to be able to overfit with zero loss and validation accuracy at chance level\n")
+            data_debug = Subset(data_all, [val_indices[0]])
+            loader_debug = DataLoader(data_debug, batch_size=1)
+
+            print("length of debug dataset: {}".format(len(loader_debug.dataset)))
+            print("length of train dataset: {}".format(len(loader_train.dataset)))
+            print("length of val dataset: {}\n".format(len(loader_val.dataset)))
+
+            model.sup_train(loader_debug, criterion, optimizer, lr_scheduler, val_loader=loader_train, epochs=5)
+
+        # STEP 4: visualize the gradient flow
+        if DEBUG_STEPS[3]:
+            print("\n\n********* DEBUGGING STEP 4 *********\n    -> visualize the gradient flow through the network\n")
+            for data, target, *_ in loader_train:
+                out = model(data)
+                loss = criterion(out, target.argmax(1))
+                loss.backward()
+                plot_grad_flow(model.named_parameters())
+                break
+
+        # STEP 5: gradient checking
+        if DEBUG_STEPS[4]:
+            print("\n\n********* DEBUGGING STEP 5 *********\n    -> perform gradient checking\n")
+
+            # check the gradient of the convolutional oligo kernel layer
+            print("gradient checking for convolutional oligo kernel layer...")
+            in_tuple = (torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.int8, requires_grad=True),)
+            test = gradcheck(model.con_model[0], in_tuple, eps=1e-6, atol=1e-4)
+            print("Result: {}\n".format(test))
+
+            # check the gradient of the loss function
+            print("gradient checking for the loss function...")
+            in_tuple = (torch.randn(4, 3, dtype=torch.double, requires_grad=True),
+                        torch.randn(4, 3, dtype=torch.double, requires_grad=True))
+            test = gradcheck(criterion, in_tuple, eps=1e-6, atol=1e-4)
+            print("Result: {}\n".format(test))
 
         # register forward and backward hooks
         # hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
@@ -235,9 +294,10 @@ def test_exp():
         # hookB.append(Hook(list(model._modules.items())[1][1], backward=True))
         # hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
 
-        running_loss = 0.0
-        running_corrects = 0
-        for data, target, *_ in loader_train:
+        #running_loss = 0.0
+        #running_corrects = 0
+        #aux_data = None
+        #for data, target, *_ in loader_train:
             # with autograd.detect_anomaly():
             #     # perform one forward step
             #     out = model(data)
@@ -257,25 +317,47 @@ def test_exp():
             #     loss.backward()
 
             # simulate epochs for a single data point
-            for i in range(10):
-                out = model(data)
+            # for i in range(10):
+            #     out = model(data)
+            #
+            #     pred = torch.zeros(out.shape)
+            #     for j in range(out.shape[0]):
+            #         pred[j, category_from_output(out[i, :])] = 1
+            #
+            #     loss = criterion(out, target.argmax(1))
+            #     loss.backward()
+            #     optimizer.step()
+            #     model.normalize_()
+            #     plot_grad_flow(model.named_parameters())
+            #
+            #     running_loss += loss.item() * data.size(0)
+            #     running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
+            #                                   torch.ones(pred.shape[0]) * pred.shape[1]).item()
+            #     print(running_loss, running_corrects)
+            #
+            # return
 
-                pred = torch.zeros(out.shape)
-                for i in range(out.shape[0]):
-                    pred[i, category_from_output(out[i, :])] = 1
+            #out = model(data)
+            #aux_data = (out, target)
+            #pred = torch.zeros(out.shape)
+            #for j in range(out.shape[0]):
+            #    pred[j, category_from_output(out[j, :])] = 1
 
-                loss = criterion(out, target.argmax(1))
-                loss.backward()
-                optimizer.step()
-                model.normalize_()
-                plot_grad_flow(model.named_parameters())
+            #loss = criterion(out, target.argmax(1))
 
-                running_loss += loss.item() * data.size(0)
-                running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
-                                              torch.ones(pred.shape[0]) * pred.shape[1]).item()
-                print(running_loss, running_corrects)
+            #optimizer.zero_grad()
+            #loss.backward()
 
-            return
+            #aux = data.clone().detach().requires_grad_(True)
+            #print("gradCheck: {}".format(gradcheck(model, (aux,))))
+
+            #optimizer.step()
+            #model.normalize_()
+            #plot_grad_flow(model.named_parameters())
+
+            #running_loss += loss.item() * data.size(0)
+            #running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
+            #                              torch.ones(pred.shape[0]) * pred.shape[1]).item()
 
             # print hooks
             # print()
@@ -304,15 +386,23 @@ def test_exp():
             #     fig.colorbar(im, ax=ax)
             # plt.show()
 
-        print("initial loss: {}".format(running_loss / len(loader_train.dataset)))
-        print("initial accuracy: {}".format(running_corrects / len(loader_train.dataset)))
+        #def apply_fn(input, *params):
+        #    return criterion(input, aux_data[1].argmax(1))
+        #gradcheck(apply_fn, aux_data[0])
+
+        #print("initial loss: {}".format(running_loss / len(loader_train.dataset)))
+        #print("initial accuracy: {}".format(running_corrects / len(loader_train.dataset)))
 
         return
 
     # DEBUGGING END
 
     # train model
-    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=20)
+    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=nb_epochs)
+
+    # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+    # model
+    torch.save(model.state_dict(), "CON_k" + str(kmer_size) + "_epochs" + str(nb_epochs) + ".pt")
 
     # iterate through dataset
     #for i_batch, sample_batch in enumerate(loader):
@@ -321,14 +411,43 @@ def test_exp():
     #    print('')
 
     # perform "testing" using the validation data point (only for debugging purpose)
-    y_pred, y_true = model.predict(loader_val, proba=True)
-    scores = torch.sum(torch.sum(y_pred == y_true, 1) == torch.ones(y_pred.shape[0]) * y_true.shape[1]).item()
+    #y_pred, y_true = model.predict(loader_val, proba=True)
+    #scores = torch.sum(torch.sum(y_pred == y_true, 1) == torch.ones(y_pred.shape[0]) * y_true.shape[1]).item()
 
     # compute_metrics might only work for binary classification
     #scores = compute_metrics(y_pred, y_true)
 
-    print(scores)
+    #print(scores)
 
+def count_classes():
+    filepath = './data/processed_PI_DataSet_sample_labels_clean.fasta'
+    class_count = [0, 0, 0]
+    nb_samples = 0
+
+    with open(filepath, 'rU') as handle:
+        for record in SeqIO.parse(handle, 'fasta'):
+            nb_samples += 1
+            aux_lab = record.id.split('|')[7]
+            if aux_lab == 'H':
+                class_count[0] += 1
+            elif aux_lab == 'M':
+                class_count[1] += 1
+            elif aux_lab == 'L':
+                class_count[2] += 1
+
+    print("class balance: H = {}, M = {}, L = {}".format(class_count[0] / nb_samples, class_count[1] / nb_samples,
+                                                         class_count[2] / nb_samples))
+
+    expected_loss = -(class_count[0] / nb_samples) * np.log(0.33) - \
+                    (class_count[1] / nb_samples) * np.log(0.33) -\
+                    (class_count[2] / nb_samples) * np.log(0.33)
+
+    print("expected loss: {}".format(expected_loss))
+
+    rand_guess = (class_count[0] / nb_samples) * 0.33 + (class_count[1] / nb_samples) * 0.33 + \
+                 (class_count[2] / nb_samples) * 0.33
+
+    print("expected accuracy with random guessing: {}".format(rand_guess))
 
 def main(filepath):
     print('main')
@@ -336,4 +455,5 @@ def main(filepath):
 
 if __name__ == '__main__':
     #main('./data/test_dataset.fasta')
+    count_classes()
     test_exp()
