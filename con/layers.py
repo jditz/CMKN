@@ -171,11 +171,6 @@ class CONLayer(nn.Conv1d):
         # initialize the tensor that holds <phi(x), phi(z)>
         dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]])
 
-        # check if ther is a NaN
-        if np.isnan(z_pos).any():
-            print(self.weight)
-            print(self.weight.grad)
-
         # fill out the dot product tensor by iterating in following order
         #   1. over all positions
         #   2. over all anchor points
@@ -194,7 +189,7 @@ class CONLayer(nn.Conv1d):
                         aux_phi_z = self.ref_kmerPos[:, int(z_pos[j][1])]
 
                     # calculate the dot product
-                    dot_phi[k, j, i] = torch.dot(x_in[k, :, i], aux_phi_z)
+                    dot_phi[k, j, i] = torch.dot(x_in[k, :, i], aux_phi_z.type(x_in.type()))
 
         # multiply kernel function evaluation with the position comparision term
         x_out = dot_phi * x_out

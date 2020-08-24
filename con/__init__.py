@@ -13,11 +13,11 @@
 from .model import CON, CON2
 from .utils import (
     find_kmer_positions, kmer2dict, category_from_output, build_kmer_ref, compute_metrics, register_hooks,
-    plot_grad_flow, Hook
+    plot_grad_flow, Hook, ClassBalanceLoss
 )
 from .data_utils import CONDataset
 
-MODEL = ['CON', 'CON2', 'CONDataset']
+MODEL = ['CON', 'CON2', 'CONDataset', 'ClassBalanceLoss']
 UTIL = ['find_kmer_positions', 'kmer2dict', 'build_kmer_ref', 'category_from_output', 'compute_metrics']
 DEBUG = ['register_hooks', 'plot_grad_flow', 'Hook']
 

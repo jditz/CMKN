@@ -9,6 +9,8 @@ import math
 import numpy as np
 from itertools import combinations, product
 import torch
+import torch.nn.functional as F
+from torch import nn
 from torch.autograd import Variable
 from Bio import SeqIO
 
@@ -269,8 +271,95 @@ kernels = {
 
 
 #############################################################################
-# AUTOGRAD EXTENSIONS
+# PYTORCH MODULS (LOSS, AUTOGRAD EXTENSION, ETC)
 #############################################################################
+
+
+class ClassBalanceLoss(nn.Module):
+    """Implementation of the Class-Balance Loss
+
+    Reference: Yin Cui, Menglin Jia, Tsung-Yi Lin, Yang Song, Serge Belongie; Proceedings of the IEEE/CVF Conference on
+               Computer Vision and Pattern Recognition (CVPR), 2019, pp. 9268-9277
+    """
+    def __init__(self, samples_per_cls, no_of_classes, loss_type, beta, gamma):
+        """
+
+        """
+        # call constructor of parent class
+        super(ClassBalanceLoss, self).__init__()
+
+        # store user-specified parameters
+        self.samples_per_cls = samples_per_cls
+        self.no_of_classes = no_of_classes
+        self.loss_type = loss_type
+        self.beta = beta
+        self.gamma = gamma
+
+    def focal_loss(self, labels, logits, alpha):
+        """Compute the focal loss between `logits` and the ground truth `labels`.
+        Focal loss = -alpha_t * (1-pt)^gamma * log(pt)
+        where pt is the probability of being classified to the true class.
+        pt = p (if true class), otherwise pt = 1 - p. p = sigmoid(logit).
+        Args:
+          labels: A float tensor of size [batch, num_classes].
+          logits: A float tensor of size [batch, num_classes].
+          alpha: A float tensor of size [batch_size]
+            specifying per-example weight for balanced cross entropy.
+        Returns:
+          focal_loss: A float32 scalar representing normalized total loss.
+        """
+        BCLoss = F.binary_cross_entropy_with_logits(input=logits, target=labels, reduction="none")
+
+        if self.gamma == 0.0:
+            modulator = 1.0
+        else:
+            modulator = torch.exp(-self.gamma * labels * logits - self.gamma * torch.log(1 + torch.exp(-1.0 * logits)))
+
+        loss = modulator * BCLoss
+
+        weighted_loss = alpha * loss
+        focal_loss = torch.sum(weighted_loss)
+
+        return focal_loss
+
+    def forward(self, labels, logits):
+        """Compute the Class Balanced Loss between `logits` and the ground truth `labels`.
+           Class Balanced Loss: ((1-beta)/(1-beta^n))*Loss(labels, logits)
+           where Loss is one of the standard losses used for Neural Networks.
+
+           Args:
+               labels: A int tensor of size [batch].
+               logits: A float tensor of size [batch, no_of_classes].
+
+           Returns:
+               cb_loss: A float tensor representing class balanced loss
+        """
+        effective_num = 1.0 - np.power(self.beta, self.samples_per_cls)
+        weights = (1.0 - self.beta) / np.array(effective_num)
+        weights = weights / np.sum(weights) * self.no_of_classes
+
+        labels_one_hot = F.one_hot(labels, self.no_of_classes).float()
+
+        weights_tensor = torch.tensor(weights).float()
+        weights_tensor = weights_tensor.unsqueeze(0)
+        weights_tensor = weights_tensor.repeat(labels_one_hot.shape[0], 1) * labels_one_hot
+        weights_tensor = weights_tensor.sum(1)
+        weights_tensor = weights_tensor.unsqueeze(1)
+        weights_tensor = weights_tensor.repeat(1, self.no_of_classes)
+
+        if self.loss_type == "focal":
+            cb_loss = self.focal_loss(labels_one_hot, logits, weights_tensor)
+        elif self.loss_type == "sigmoid":
+            cb_loss = F.binary_cross_entropy_with_logits(input=logits, target=labels_one_hot, weights=weights_tensor)
+        elif self.loss_type == "softmax":
+            pred = logits.softmax(dim=1)
+            cb_loss = F.binary_cross_entropy(input=pred, target=labels_one_hot, weight=weights_tensor)
+        elif self.loss_type == "cross_entropy":
+            cb_loss = F.cross_entropy(input=logits, target=labels, weight=torch.tensor(weights).float())
+        else:
+            raise ValueError("Undefined loss function: {}.".format(self.loss_type) +
+                             "\n            Valid values are 'focal', 'sigmoid', 'softmax', and 'cross_entropy'.")
+        return cb_loss
 
 
 class MatrixInverseSqrt(torch.autograd.Function):

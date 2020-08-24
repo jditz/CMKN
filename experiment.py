@@ -17,8 +17,8 @@ from torch.autograd import gradcheck
 import torch.optim as optim
 import numpy as np
 
-from con import (CON, CON2, CONDataset, kmer2dict, build_kmer_ref, category_from_output, compute_metrics,
-                 plot_grad_flow, Hook)# register_hooks
+from con import (CON, CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref, category_from_output,
+                 compute_metrics, plot_grad_flow, Hook)# register_hooks
 
 import matplotlib.pyplot as plt
 from timeit import default_timer as timer
@@ -26,7 +26,11 @@ from Bio import SeqIO
 
 
 # MACROS
+
+# set to True to enable network debugging
 DEBUGGING = True
+
+# each Boolean value decides if the corresponding debugging step will be performed
 DEBUG_STEPS = [False, True, False, False, True]
 
 
@@ -173,6 +177,7 @@ def test_exp():
     # set parameters for the test run
     #filepath = './data/processed_PI_DataSet_sample_labels_clean.fasta'
     filepath = './data/test_dataset.fasta'
+    class_count, expected_loss = count_classes(filepath)
     extension = 'fasta'
     kmer_size = 3
     alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
@@ -217,7 +222,8 @@ def test_exp():
 
     # initialize optimizer and loss function
     #criterion = nn.BCEWithLogitsLoss()
-    criterion = nn.CrossEntropyLoss()
+    #criterion = nn.CrossEntropyLoss()
+    criterion = ClassBalanceLoss(class_count, len(class_count), 'focal', 0.99, 1.0)
     optimizer = optim.Adam(model.parameters(), lr=0.1)
     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
@@ -242,7 +248,7 @@ def test_exp():
                 loss = criterion(out, target.argmax(1))
                 running_loss += loss.item() * data.size(0)
             init_loss = running_loss / len(loader_train.dataset)
-            print("\ninitial loss: {}; expected loss: {}".format(init_loss, 1.1086626245216111))
+            print("\ninitial loss: {}; expected loss: {}".format(init_loss, expected_loss))
 
         # STEP 3: train model on a single data point and see if it can overfit
         if DEBUG_STEPS[2]:
@@ -272,15 +278,15 @@ def test_exp():
             print("\n\n********* DEBUGGING STEP 5 *********\n    -> perform gradient checking\n")
 
             # check the gradient of the convolutional oligo kernel layer
-            print("gradient checking for convolutional oligo kernel layer...")
-            in_tuple = (torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.int8, requires_grad=True),)
-            test = gradcheck(model.con_model[0], in_tuple, eps=1e-6, atol=1e-4)
-            print("Result: {}\n".format(test))
+            #print("gradient checking for convolutional oligo kernel layer...")
+            #in_tuple = (torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.double, requires_grad=True),)
+            #test = gradcheck(model.con_model[0], in_tuple, eps=1e-6, atol=1e-4)
+            #print("Result: {}\n".format(test))
 
             # check the gradient of the loss function
             print("gradient checking for the loss function...")
-            in_tuple = (torch.randn(4, 3, dtype=torch.double, requires_grad=True),
-                        torch.randn(4, 3, dtype=torch.double, requires_grad=True))
+            in_tuple = (torch.randn(4, 3, dtype=torch.double, requires_grad=True).argmax(1),
+                        torch.randn(4, 3, dtype=torch.double, requires_grad=True).argmax(1))
             test = gradcheck(criterion, in_tuple, eps=1e-6, atol=1e-4)
             print("Result: {}\n".format(test))
 
@@ -419,8 +425,8 @@ def test_exp():
 
     #print(scores)
 
-def count_classes():
-    filepath = './data/processed_PI_DataSet_sample_labels_clean.fasta'
+
+def count_classes(filepath, verbose=False):
     class_count = [0, 0, 0]
     nb_samples = 0
 
@@ -435,19 +441,25 @@ def count_classes():
             elif aux_lab == 'L':
                 class_count[2] += 1
 
-    print("class balance: H = {}, M = {}, L = {}".format(class_count[0] / nb_samples, class_count[1] / nb_samples,
-                                                         class_count[2] / nb_samples))
+    if verbose:
+        print("class balance: H = {}, M = {}, L = {}".format(class_count[0] / nb_samples, class_count[1] / nb_samples,
+                                                             class_count[2] / nb_samples))
 
     expected_loss = -(class_count[0] / nb_samples) * np.log(0.33) - \
                     (class_count[1] / nb_samples) * np.log(0.33) -\
                     (class_count[2] / nb_samples) * np.log(0.33)
 
-    print("expected loss: {}".format(expected_loss))
+    if verbose:
+        print("expected loss: {}".format(expected_loss))
 
     rand_guess = (class_count[0] / nb_samples) * 0.33 + (class_count[1] / nb_samples) * 0.33 + \
                  (class_count[2] / nb_samples) * 0.33
 
-    print("expected accuracy with random guessing: {}".format(rand_guess))
+    if verbose:
+        print("expected accuracy with random guessing: {}".format(rand_guess))
+
+    return class_count, expected_loss
+
 
 def main(filepath):
     print('main')
@@ -455,5 +467,5 @@ def main(filepath):
 
 if __name__ == '__main__':
     #main('./data/test_dataset.fasta')
-    count_classes()
+    count_classes('./data/processed_PI_DataSet_sample_labels_clean.fasta', True)
     test_exp()
