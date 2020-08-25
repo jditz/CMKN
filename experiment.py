@@ -31,7 +31,7 @@ from Bio import SeqIO
 DEBUGGING = True
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [False, True, False, False, True]
+DEBUG_STEPS = [False, True, False, False, True, False]
 
 
 name = 'example_experiment'
@@ -223,7 +223,7 @@ def test_exp():
     # initialize optimizer and loss function
     #criterion = nn.BCEWithLogitsLoss()
     #criterion = nn.CrossEntropyLoss()
-    criterion = ClassBalanceLoss(class_count, len(class_count), 'focal', 0.99, 1.0)
+    criterion = ClassBalanceLoss(class_count, len(class_count), 'cross_entropy', 0.99, 1.0)
     optimizer = optim.Adam(model.parameters(), lr=0.1)
     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
@@ -261,7 +261,7 @@ def test_exp():
             print("length of train dataset: {}".format(len(loader_train.dataset)))
             print("length of val dataset: {}\n".format(len(loader_val.dataset)))
 
-            model.sup_train(loader_debug, criterion, optimizer, lr_scheduler, val_loader=loader_train, epochs=5)
+            model.sup_train(loader_debug, criterion, optimizer, lr_scheduler, val_loader=loader_train, epochs=3)
 
         # STEP 4: visualize the gradient flow
         if DEBUG_STEPS[3]:
@@ -273,9 +273,25 @@ def test_exp():
                 plot_grad_flow(model.named_parameters())
                 break
 
-        # STEP 5: gradient checking
+        # STEP 5: visualizing the whole network with TensorBoard
         if DEBUG_STEPS[4]:
-            print("\n\n********* DEBUGGING STEP 5 *********\n    -> perform gradient checking\n")
+            print("\n\n********* DEBUGGING STEP 5 *********\n    -> visualize the network using TensorBoard\n" +
+                  "    -> type 'tensorboard --logdir=runs' into the command line and navigate to " +
+                  "https://localhost:6006 to inspect model\n")
+
+            # import and initialize TensorBoard
+            from torch.utils.tensorboard import SummaryWriter
+            writer = SummaryWriter('runs/debug')
+
+            # add model to TensorBoard
+            dataiter = iter(loader_train)
+            viz_data, *_ = dataiter.next()
+            writer.add_graph(model, viz_data)
+            writer.close()
+
+        # STEP 6: gradient checking
+        if DEBUG_STEPS[5]:
+            print("\n\n********* DEBUGGING STEP 6 *********\n    -> perform gradient checking\n")
 
             # check the gradient of the convolutional oligo kernel layer
             #print("gradient checking for convolutional oligo kernel layer...")

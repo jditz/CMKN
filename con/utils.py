@@ -282,8 +282,20 @@ class ClassBalanceLoss(nn.Module):
                Computer Vision and Pattern Recognition (CVPR), 2019, pp. 9268-9277
     """
     def __init__(self, samples_per_cls, no_of_classes, loss_type, beta, gamma):
-        """
+        """Constructor of the class-balance loss class
 
+        - **Parameters**::
+
+            :param samples_per_cls: List containing the number of samples per class in the dataset
+                :type samples_per_cls: List of Integers
+            :param no_of_classes: Number of classes
+                :type no_of_classes: Integer
+            :param loss_type: Loss function used for the class-balance loss
+                :type loss_type: String
+            :param beta: Hyperparameter for Class balanced loss.
+                :type beta: Float
+            :param gamma: Hyperparameter for Focal loss
+                :type gamma: Float
         """
         # call constructor of parent class
         super(ClassBalanceLoss, self).__init__()
@@ -297,16 +309,23 @@ class ClassBalanceLoss(nn.Module):
 
     def focal_loss(self, labels, logits, alpha):
         """Compute the focal loss between `logits` and the ground truth `labels`.
-        Focal loss = -alpha_t * (1-pt)^gamma * log(pt)
-        where pt is the probability of being classified to the true class.
+
+        Focal loss = -alpha_t * (1-pt)^gamma * log(pt), where pt is the probability of being classified to the true
+        class.
         pt = p (if true class), otherwise pt = 1 - p. p = sigmoid(logit).
-        Args:
-          labels: A float tensor of size [batch, num_classes].
-          logits: A float tensor of size [batch, num_classes].
-          alpha: A float tensor of size [batch_size]
-            specifying per-example weight for balanced cross entropy.
-        Returns:
-          focal_loss: A float32 scalar representing normalized total loss.
+
+        - **Parameters**::
+
+            :param labels: Tensor containing the true labels
+                :type labels: float tensor of size [batch, num_classes].
+            :param logits: Tensor containing the output of the network
+                :type logits: float tensor of size [batch, num_classes].
+            :param alpha: Tensor specifying per-example weight for balanced cross entropy.
+                :type alpha: float tensor of size [batch_size]
+
+        - **Returns**::
+
+            :returns a float32 scalar representing normalized total loss.
         """
         BCLoss = F.binary_cross_entropy_with_logits(input=logits, target=labels, reduction="none")
 
@@ -320,19 +339,25 @@ class ClassBalanceLoss(nn.Module):
         weighted_loss = alpha * loss
         focal_loss = torch.sum(weighted_loss)
 
+        focal_loss /= torch.sum(labels)
         return focal_loss
 
-    def forward(self, labels, logits):
+    def forward(self, logits, labels):
         """Compute the Class Balanced Loss between `logits` and the ground truth `labels`.
-           Class Balanced Loss: ((1-beta)/(1-beta^n))*Loss(labels, logits)
-           where Loss is one of the standard losses used for Neural Networks.
 
-           Args:
-               labels: A int tensor of size [batch].
-               logits: A float tensor of size [batch, no_of_classes].
+        Class Balanced Loss: ((1-beta)/(1-beta^n))*Loss(labels, logits)
+        where Loss is one of the standard losses used for Neural Networks.
 
-           Returns:
-               cb_loss: A float tensor representing class balanced loss
+        - **Parameters**::
+
+            :param logits: Tensor containing the output of the network
+                :type logits: float tensor of size [batch, num_classes].
+            :param labels: Tensor containing the true labels
+                :type labels: float tensor of size [batch].
+
+        - **Returns**::
+
+            :returns a float tensor representing class balanced loss
         """
         effective_num = 1.0 - np.power(self.beta, self.samples_per_cls)
         weights = (1.0 - self.beta) / np.array(effective_num)
