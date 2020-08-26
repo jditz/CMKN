@@ -125,7 +125,7 @@ class CONLayer(nn.Conv1d):
 
         return lintrans
 
-    def _conv_layer(self, x_in):
+    def _conv_layer(self, x_in, phi):
         """Convolution layer
 
         This layer computes the convolution: x_out = <phi(p), phi(Z)> * kappa(Zt p)
@@ -134,6 +134,8 @@ class CONLayer(nn.Conv1d):
 
             :param x_in: Input tensor storing the function values phi(p)
                 :type x_in: Tensor (batch_size x in_channels x |S|)
+            :param phi: Tensor storing the one-hot-encoding phi(pos) for each position of the input
+                :type phi: Tensor (batch_size x nb_kmer x |S|)
 
         - **Returns**::
 
@@ -142,18 +144,18 @@ class CONLayer(nn.Conv1d):
         """
         # create the input tensor
         in_size = x_in.size()
-        aux_in = torch.zeros([in_size[0], self.in_channels, in_size[-1]])
-        for i in range(in_size[-1]):
-            # project current position on the upper half of the unit circle
-            x_circle = np.cos(((i+1)/in_size[-1]) * np.pi)
-            y_circle = np.sin(((i+1)/in_size[-1]) * np.pi)
+        #aux_in = torch.zeros([in_size[0], self.in_channels, in_size[-1]])
+        #for i in range(in_size[-1]):
+        #    # project current position on the upper half of the unit circle
+        #    x_circle = np.cos(((i+1)/in_size[-1]) * np.pi)
+        #    y_circle = np.sin(((i+1)/in_size[-1]) * np.pi)
 
-            # fill the input tensor
-            aux_in[:, 0, i] = x_circle
-            aux_in[:, 1, i] = y_circle
+        #    # fill the input tensor
+        #    aux_in[:, 0, i] = x_circle
+        #    aux_in[:, 1, i] = y_circle
 
         # calculate dot product between input and anchor points
-        x_out = super(CONLayer, self).forward(aux_in)
+        x_out = super(CONLayer, self).forward(x_in)
 
         # evaluate kernel function with the calculated dot product
         x_out = self.kappa(x_out)
@@ -183,15 +185,15 @@ class CONLayer(nn.Conv1d):
                     #      from two positions in self.ref_kmerPos
                     #   -> make sure to prevent out of index errors
                     if int(z_pos[j][1]) < (in_size[-1] - 1):
-                        aux_phi_z = ((1 - z_pos[j][0]) * self.ref_kmerPos[:, int(z_pos[j][1])] +
+                        phi_z = ((1 - z_pos[j][0]) * self.ref_kmerPos[:, int(z_pos[j][1])] +
                                      z_pos[j][0] * self.ref_kmerPos[:, int(z_pos[j][1]) + 1]) / 2
                     else:
-                        aux_phi_z = self.ref_kmerPos[:, int(z_pos[j][1])]
+                        phi_z = self.ref_kmerPos[:, int(z_pos[j][1])]
 
                     # calculate the dot product
-                    dot_phi[k, j, i] = torch.dot(x_in[k, :, i], aux_phi_z.type(x_in.type()))
+                    dot_phi[k, j, i] = torch.dot(phi[k, :, i], phi_z.type(x_in.type()))
 
-        # multiply kernel function evaluation with the position comparision term
+        # multiply kernel function evaluation with the position comparison term
         x_out = dot_phi * x_out
         return x_out
 
@@ -221,16 +223,18 @@ class CONLayer(nn.Conv1d):
             return torch.mm(x_in, lintrans)
         return torch.bmm(lintrans.expand(batch_size, out_c, out_c), x_in)
 
-    def forward(self, x_in):
+    def forward(self, x_in, phi):
         """Encode function for a CON layer
 
         - **Parameters**::
 
             :param x_in: Input tensor storing the function values phi(p)
                 :type x_in: Tensor (batch_size x in_channels x |S|)
+            :param phi: Tensor storing the one-hot-encoding phi(pos) for each position of the input
+                :type phi: Tensor (batch_size x nb_kmer x |S|)
         """
         # perform the convolution
-        x_out = self._conv_layer(x_in)
+        x_out = self._conv_layer(x_in, phi)
 
         # calculate the linear transformation factor (if needed)
         lintrans = self._compute_lintrans()

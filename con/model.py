@@ -781,53 +781,50 @@ class CON2(nn.Module):
         self.seq_len = ref_kmerPos.size(1)
         self.num_classes = num_classes
 
-        # initialize the convolutional oligo kernel layer and all additional "normal" convolutional layers
+        # set the default kernel function if none was specified
+        if kernel_func is None:
+            kernel_func = "exp"
+
+        # set the default kernel hyper-parameters (e.g. sigma) if none were specified
+        if kernel_args is None:
+            kernel_args = [1, 1]
+            kernel_args_trainable = False
+
+        # initialize the CON layer using all predefined parameters
+        self.oligo = CONLayer(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
+                              kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
+
+        # initialize the additional "normal" convolutional layers
         convlayers = []
-        for i in range(len(out_channels_list)):
-            # first layer will always be a convolutional oligo kernel layer
-            if i == 0:
-                # set the default kernel function if none was specified
-                if kernel_func is None:
-                    kernel_func = "exp"
+        for i in range(1, len(out_channels_list)):
 
-                # set the default kernel hyper-parameters (e.g. sigma) if none were specified
-                if kernel_args is None:
-                    kernel_args = [1, 1]
-                    kernel_args_trainable = False
-
-                # initialize the CON layer using all predefined parameters
-                convlayers.append(CONLayer(out_channels_list[i], ref_kmerPos, subsampling=strides[i],
-                                           kernel_func=kernel_func, kernel_args=kernel_args,
-                                           kernel_args_trainable=kernel_args_trainable, **kwargs))
-
+            # set padding parameter dependent on the selected padding type
+            if paddings[i-1] == "SAME":
+                padding = (filter_sizes[i-1] - 1) // 2
             else:
-                # set padding parameter dependent on the selected padding type
-                if paddings[i-1] == "SAME":
-                    padding = (filter_sizes[i-1] - 1) // 2
-                else:
-                    padding = 0
+                padding = 0
 
-                # initialize the "normal" convolutional layers
-                #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
-                convlayers.append(nn.Conv1d(out_channels_list[i-1], out_channels_list[i], kernel_size=filter_sizes[i-1],
-                                            stride=1, padding=padding))
+            # initialize the "normal" convolutional layers
+            #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
+            convlayers.append(nn.Conv1d(out_channels_list[i-1], out_channels_list[i], kernel_size=filter_sizes[i-1],
+                                        stride=1, padding=padding))
 
-                # perform batch normalization after each conv layer (if set to True)
-                if batchNorm:
-                    convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
+            # perform batch normalization after each conv layer (if set to True)
+            if batchNorm:
+                convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
 
-                # use rectifiedLinearUnit as activation function
-                convlayers.append(nn.ReLU(inplace=True))
+            # use rectifiedLinearUnit as activation function
+            convlayers.append(nn.ReLU(inplace=True))
 
-                # use dropout after each conv layer (if set to True)
-                if dropout:
-                    convlayers.append(nn.Dropout())
+            # use dropout after each conv layer (if set to True)
+            if dropout:
+                convlayers.append(nn.Dropout())
 
-                # add max pooling
-                convlayers.append(poolings[pool](kernel_size=filter_sizes[i-1], stride=strides[i]))
+            # add max pooling
+            convlayers.append(poolings[pool](kernel_size=filter_sizes[i-1], stride=strides[i]))
 
         # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
-        self.con_model = nn.Sequential(*convlayers)
+        self.conv = nn.Sequential(*convlayers)
 
         # initialize the global pooling layer
         self.global_pool = POOLINGS[global_pool]()
@@ -847,14 +844,16 @@ class CON2(nn.Module):
     def normalize_(self):
         """ Function to normalize the weights of  the convolutional oligo kernel layer
         """
-        self.con_model[0].normalize_()
+        self.oligo.normalize_()
 
-    def forward(self, input, proba=False):
+    def forward(self, input, phi, proba=False):
         """ Overwritten forward function for CON objects
 
         - **Parameters**::
             :param input: Input to the CONSequential object
-                :type input: Tensor
+                :type input: Tensor (batch_size x 2 x |S|)
+            :param phi: Tensor storing the one-hot-encoding phi(pos) for each position of the input
+                :type phi: Tensor (batch_size x nb_kmer x |S|)
             :param proba: Indicates whether the network should produce probabilistic output
                 :type proba: Boolean
 
@@ -862,8 +861,8 @@ class CON2(nn.Module):
 
             :return: Evaluation of the input
         """
-
-        output = self.con_model(input)
+        output = self.oligo(input, phi)
+        output = self.conv(output)
         output = self.global_pool(output)
         output = self.classifier(output)
         if proba:
@@ -971,20 +970,16 @@ class CON2(nn.Module):
     def initialize(self):
         """ Function to initialize parameters of the network
         """
+        # initialize the anchor points of the CON layer in an unsupervised fashion
+        print("Initializing layer 0 (oligo kernel layer)...")
+        self.oligo.unsup_train(self.seq_len)
 
         # iterate over all convolutional layers
-        for i, layer in enumerate(self.con_model):
+        for i, layer in enumerate(self.conv):
 
-            # initialize the convolutional oligo kernel layer
-            if i == 0:
-                print("Initializing layer {} (oligo kernel layer)...".format(i))
-
-                # initialize the anchor points of the CON layer in an unsupervised fashion
-                layer.unsup_train(self.seq_len)
-
-            # initialize "normal" convolution layers
-            elif isinstance(layer, nn.Conv1d):
-                print("Initializing layer {} (conv layer)...".format(i))
+            # initialize the convolutional layer
+            if isinstance(layer, nn.Conv1d):
+                print("Initializing layer {} (conv layer)...".format(i+1))
 
                 # initializing weights using the He initialization (also called Kaiming initialization)
                 #   -> only use this initialization if ReLU activation is used
@@ -1088,8 +1083,20 @@ class CON2(nn.Module):
                 running_corrects = 0
 
                 # iterate over the data that will be used in the current phase
-                for data, target, *_ in data_loader[phase]:
+                for phi, target, *_ in data_loader[phase]:
+                    # create input data
+                    data = torch.zeros(phi.size(0), 2, phi.size(-1))
+                    for i in range(phi.size(-1)):
+                        # project current position on the upper half of the unit circle
+                        x_circle = np.cos(((i + 1) / phi.size(-1)) * np.pi)
+                        y_circle = np.sin(((i + 1) / phi.size(-1)) * np.pi)
+
+                        # fill the input tensor
+                        data[:, 0, i] = x_circle
+                        data[:, 1, i] = y_circle
+
                     size = data.size(0)
+                    phi.requires_grad = False
                     target = target.float()
 
                     # if the computations take place on the GPU, send data to GPU
@@ -1104,7 +1111,7 @@ class CON2(nn.Module):
                     #   -> do not keep track of the gradients if we are in the validation phase
                     if phase == 'val':
                         with torch.no_grad():
-                            output = self(data)
+                            output = self(data, phi)
 
                             # create prediction tensor
                             if self.num_classes > 2:
@@ -1120,7 +1127,7 @@ class CON2(nn.Module):
                             else:
                                 loss = criterion(output, target)
                     else:
-                        output = self(data)
+                        output = self(data, phi)
 
                         # create prediction tensor
                         if self.num_classes > 2:

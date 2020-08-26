@@ -31,7 +31,7 @@ from Bio import SeqIO
 DEBUGGING = True
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [False, True, False, False, True, False]
+DEBUG_STEPS = [False, True, False, False, True, False, False]
 
 
 name = 'example_experiment'
@@ -243,8 +243,19 @@ def test_exp():
                   "    -> initial loss should be close to expected loss\n")
             model.initialize()
             running_loss = 0
-            for data, target, *_ in loader_train:
-                out = model(data)
+            for phi, target, *_ in loader_train:
+                phi.requires_grad = False
+                data = torch.zeros(phi.size(0), 2, phi.size(-1))
+                for i in range(phi.size(-1)):
+                    # project current position on the upper half of the unit circle
+                    x_circle = np.cos(((i+1)/phi.size(-1)) * np.pi)
+                    y_circle = np.sin(((i+1)/phi.size(-1)) * np.pi)
+
+                    # fill the input tensor
+                    data[:, 0, i] = x_circle
+                    data[:, 1, i] = y_circle
+
+                out = model(data, phi)
                 loss = criterion(out, target.argmax(1))
                 running_loss += loss.item() * data.size(0)
             init_loss = running_loss / len(loader_train.dataset)
@@ -266,8 +277,19 @@ def test_exp():
         # STEP 4: visualize the gradient flow
         if DEBUG_STEPS[3]:
             print("\n\n********* DEBUGGING STEP 4 *********\n    -> visualize the gradient flow through the network\n")
-            for data, target, *_ in loader_train:
-                out = model(data)
+            for phi, target, *_ in loader_train:
+                phi.requires_grad = False
+                data = torch.zeros(phi.size(0), 2, phi.size(-1))
+                for i in range(phi.size(-1)):
+                    # project current position on the upper half of the unit circle
+                    x_circle = np.cos(((i + 1) / phi.size(-1)) * np.pi)
+                    y_circle = np.sin(((i + 1) / phi.size(-1)) * np.pi)
+
+                    # fill the input tensor
+                    data[:, 0, i] = x_circle
+                    data[:, 1, i] = y_circle
+
+                out = model(data, phi)
                 loss = criterion(out, target.argmax(1))
                 loss.backward()
                 plot_grad_flow(model.named_parameters())
@@ -285,8 +307,18 @@ def test_exp():
 
             # add model to TensorBoard
             dataiter = iter(loader_train)
-            viz_data, *_ = dataiter.next()
-            writer.add_graph(model, viz_data)
+            viz_phi, *_ = dataiter.next()
+            viz_phi.requires_grad = False
+            viz_data = torch.zeros(viz_phi.size(0), 2, viz_phi.size(-1))
+            for i in range(viz_phi.size(-1)):
+                # project current position on the upper half of the unit circle
+                x_circle = np.cos(((i + 1) / viz_phi.size(-1)) * np.pi)
+                y_circle = np.sin(((i + 1) / viz_phi.size(-1)) * np.pi)
+
+                # fill the input tensor
+                viz_data[:, 0, i] = x_circle
+                viz_data[:, 1, i] = y_circle
+            writer.add_graph(model, (viz_data, viz_phi))
             writer.close()
 
         # STEP 6: gradient checking
@@ -295,16 +327,61 @@ def test_exp():
 
             # check the gradient of the convolutional oligo kernel layer
             #print("gradient checking for convolutional oligo kernel layer...")
-            #in_tuple = (torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.double, requires_grad=True),)
+            #in_tuple = (torch.randn(4, 2, ref_pos.size(1), dtype=torch.double, requires_grad=False),
+            #            torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.double, requires_grad=False))
             #test = gradcheck(model.con_model[0], in_tuple, eps=1e-6, atol=1e-4)
             #print("Result: {}\n".format(test))
 
             # check the gradient of the loss function
             print("gradient checking for the loss function...")
-            in_tuple = (torch.randn(4, 3, dtype=torch.double, requires_grad=True).argmax(1),
-                        torch.randn(4, 3, dtype=torch.double, requires_grad=True).argmax(1))
+            in_tuple = (torch.randn(4, 3, dtype=torch.double, requires_grad=True),
+                        torch.randn(4, 3, dtype=torch.double, requires_grad=False).argmax(1))
             test = gradcheck(criterion, in_tuple, eps=1e-6, atol=1e-4)
             print("Result: {}\n".format(test))
+
+        if DEBUG_STEPS[6]:
+            print("\n\n********* DEBUGGING STEP 7 *********\n    -> visualize the oligo kernel embedding\n")
+
+            # register a forward hook on the oligo kernel layer to inspect the kernel embedding
+            hook_oligo = Hook(list(model._modules.items())[0][1])
+
+            # iterate through data set and store the embeddings
+            kernel_embeddings = []
+            labels = []
+            for phi, label, *_ in loader_train:
+                phi.requires_grad = False
+                data = torch.zeros(phi.size(0), 2, phi.size(-1))
+                for i in range(phi.size(-1)):
+                    # project current position on the upper half of the unit circle
+                    x_circle = np.cos(((i + 1) / phi.size(-1)) * np.pi)
+                    y_circle = np.sin(((i + 1) / phi.size(-1)) * np.pi)
+
+                    # fill the input tensor
+                    data[:, 0, i] = x_circle
+                    data[:, 1, i] = y_circle
+
+                # pass data through network to get the kernel embedding
+                _ = model(data, phi)
+
+                # store embeddings and labels
+                aux_emb = []
+                aux_lab = []
+                for i in range(data.size(0)):
+                    aux_emb.append(hook_oligo.output[i, :, :].detach().numpy())
+                    aux_lab.append(label[i, :])
+                kernel_embeddings.append(aux_emb)
+                labels.append(aux_lab)
+
+            # visualize embeddings as heatmaps
+            fig, axs = plt.subplots(len(kernel_embeddings), len(kernel_embeddings[0]))
+            for i in range(len(kernel_embeddings)):
+                for j in range(len(kernel_embeddings[0])):
+                    im = axs[i, j].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
+                    axs[i, j].set_title("target = %s" % str(labels[i][j]))
+                    axs[i, j].set(xlabel='position', ylabel='anchor point')
+                    axs[i, j].label_outer()
+                    fig.colorbar(im, ax=axs[i, j])
+            plt.show()
 
         # register forward and backward hooks
         # hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
@@ -421,6 +498,34 @@ def test_exp():
 
     # train model
     model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=nb_epochs)
+
+    # register a forward hook on the oligo kernel layer to inspect the kernel embedding
+    hook_oligo = Hook(list(list(model._modules.items())[0][1])[0])
+
+    # iterate through data set and store the embeddings
+    kernel_embeddings = []
+    labels = []
+    for data, label, *_ in loader_train:
+        # pass data through network to get the kernel embedding
+        out = model(data)
+
+        # store embeddings and labels
+        aux_emb = []
+        aux_lab = []
+        for i in range(data.size(0)):
+            aux_emb.append(hook_oligo.output[i, :, :].detach().numpy())
+            aux_lab.append(label[i, :])
+        kernel_embeddings.append(aux_emb)
+        labels.append(aux_lab)
+
+    # visualize embeddings as heatmaps
+    fig, axs = plt.subplots(len(kernel_embeddings), len(kernel_embeddings[0]))
+    for i in range(len(kernel_embeddings)):
+        for j in range(len(kernel_embeddings[0])):
+            im = axs[i, j].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
+            axs[i, j].set_title("target = %s" % str(labels[i][j]))
+            fig.colorbar(im, ax=axs[i, j])
+    plt.show()
 
     # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
     # model
