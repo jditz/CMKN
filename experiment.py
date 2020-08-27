@@ -31,7 +31,7 @@ from Bio import SeqIO
 DEBUGGING = True
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [False, True, False, False, True, False, False]
+DEBUG_STEPS = [True, True, False, False, False, False, False]
 
 
 name = 'example_experiment'
@@ -195,7 +195,8 @@ def test_exp():
     #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
     #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
     model = CON2(out_channels_list=[40, 32, 64, 128, 512, 1024], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5, 10],
-                 strides=[1, 1, 1, 1, 1, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME', 'SAME'], num_classes=3)
+                 strides=[1, 1, 1, 1, 1, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME', 'SAME'], num_classes=3,
+                 kernel_args=[1.25, 1])
     #model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3)
 
     # load data
@@ -326,11 +327,11 @@ def test_exp():
             print("\n\n********* DEBUGGING STEP 6 *********\n    -> perform gradient checking\n")
 
             # check the gradient of the convolutional oligo kernel layer
-            #print("gradient checking for convolutional oligo kernel layer...")
-            #in_tuple = (torch.randn(4, 2, ref_pos.size(1), dtype=torch.double, requires_grad=False),
-            #            torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.double, requires_grad=False))
-            #test = gradcheck(model.con_model[0], in_tuple, eps=1e-6, atol=1e-4)
-            #print("Result: {}\n".format(test))
+            print("gradient checking for convolutional oligo kernel layer...")
+            in_tuple = (torch.randn(4, 2, ref_pos.size(1), dtype=torch.double, requires_grad=False),
+                        torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.double, requires_grad=False))
+            test = gradcheck(model.con_model[0], in_tuple, eps=1e-6, atol=1e-4)
+            print("Result: {}\n".format(test))
 
             # check the gradient of the loss function
             print("gradient checking for the loss function...")
@@ -500,14 +501,25 @@ def test_exp():
     model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=nb_epochs)
 
     # register a forward hook on the oligo kernel layer to inspect the kernel embedding
-    hook_oligo = Hook(list(list(model._modules.items())[0][1])[0])
+    hook_oligo = Hook(list(model._modules.items())[0][1])
 
     # iterate through data set and store the embeddings
     kernel_embeddings = []
     labels = []
-    for data, label, *_ in loader_train:
+    for phi, label, *_ in loader_train:
+        phi.requires_grad = False
+        data = torch.zeros(phi.size(0), 2, phi.size(-1))
+        for i in range(phi.size(-1)):
+            # project current position on the upper half of the unit circle
+            x_circle = np.cos(((i + 1) / phi.size(-1)) * np.pi)
+            y_circle = np.sin(((i + 1) / phi.size(-1)) * np.pi)
+
+            # fill the input tensor
+            data[:, 0, i] = x_circle
+            data[:, 1, i] = y_circle
+
         # pass data through network to get the kernel embedding
-        out = model(data)
+        _ = model(data, phi)
 
         # store embeddings and labels
         aux_emb = []
