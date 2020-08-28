@@ -28,10 +28,10 @@ from Bio import SeqIO
 # MACROS
 
 # set to True to enable network debugging
-DEBUGGING = True
+DEBUGGING = False
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [True, True, False, False, False, False, False]
+DEBUG_STEPS = [True, True, False, False, False, False, True]
 
 
 name = 'example_experiment'
@@ -194,10 +194,11 @@ def test_exp():
     #            kernel_args_list=[[1.25, 1], [0.5]], kernel_args_trainable=[False, False])
     #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
     #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
-    model = CON2(out_channels_list=[40, 32, 64, 128, 512, 1024], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5, 10],
-                 strides=[1, 1, 1, 1, 1, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME', 'SAME'], num_classes=3,
+    #model = CON2(out_channels_list=[40, 32, 64, 128, 512, 1024], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5, 10],
+    #             strides=[1, 1, 1, 1, 1, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME', 'SAME'], num_classes=3,
+    #             kernel_args=[1.25, 1])
+    model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3,
                  kernel_args=[1.25, 1])
-    #model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3)
 
     # load data
     data_all = CustomHandler(filepath)

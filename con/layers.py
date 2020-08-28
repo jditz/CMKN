@@ -144,15 +144,6 @@ class CONLayer(nn.Conv1d):
         """
         # create the input tensor
         in_size = x_in.size()
-        #aux_in = torch.zeros([in_size[0], self.in_channels, in_size[-1]])
-        #for i in range(in_size[-1]):
-        #    # project current position on the upper half of the unit circle
-        #    x_circle = np.cos(((i+1)/in_size[-1]) * np.pi)
-        #    y_circle = np.sin(((i+1)/in_size[-1]) * np.pi)
-
-        #    # fill the input tensor
-        #    aux_in[:, 0, i] = x_circle
-        #    aux_in[:, 1, i] = y_circle
 
         # calculate dot product between input and anchor points
         x_out = super(CONLayer, self).forward(x_in)

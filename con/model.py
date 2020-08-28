@@ -827,11 +827,11 @@ class CON2(nn.Module):
         self.conv = nn.Sequential(*convlayers)
 
         # initialize the global pooling layer
-        self.global_pool = POOLINGS[global_pool]()
+        #self.global_pool = POOLINGS[global_pool]()
 
         # set the number of output features
         #   -> this is the number of output channels of the last CON layer
-        self.out_features = out_channels_list[-1]
+        self.out_features = out_channels_list[-1] * self.seq_len
 
         # initialize the classification layer
         self.initialize_scaler(scaler)
@@ -863,7 +863,8 @@ class CON2(nn.Module):
         """
         output = self.oligo(input, phi)
         output = self.conv(output)
-        output = self.global_pool(output)
+        #output = self.global_pool(output)
+        output = output.view(output.size(0), -1)
         output = self.classifier(output)
         if proba:
             # activate with sigmoid function only for binary classification
