@@ -821,7 +821,7 @@ class CON2(nn.Module):
                 convlayers.append(nn.Dropout())
 
             # add max pooling
-            convlayers.append(poolings[pool](kernel_size=filter_sizes[i-1], stride=strides[i]))
+            convlayers.append(poolings[pool](kernel_size=filter_sizes[i-1], stride=strides[i], padding=padding))
 
         # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
         self.conv = nn.Sequential(*convlayers)
@@ -836,7 +836,9 @@ class CON2(nn.Module):
         # initialize the classification layer
         self.initialize_scaler(scaler)
         #self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
-        self.classifier = nn.Linear(self.out_features, self.num_classes, fit_bias)
+        self.fc = nn.Linear(self.out_features, self.num_classes*100, fit_bias)
+        self.classifier = nn.Linear(self.num_classes*100, self.num_classes, fit_bias)
+
 
     def initialize_scaler(self, scaler=None):
         pass
@@ -865,6 +867,7 @@ class CON2(nn.Module):
         output = self.conv(output)
         #output = self.global_pool(output)
         output = output.view(output.size(0), -1)
+        output = self.fc(output)
         output = self.classifier(output)
         if proba:
             # activate with sigmoid function only for binary classification
@@ -1011,7 +1014,7 @@ class CON2(nn.Module):
 
         - **Returns**::
 
-            :return trained model
+            :return training and validation accuracies and losses of each epoch
         """
 
         print("Initializing CON layers")
@@ -1038,6 +1041,8 @@ class CON2(nn.Module):
         best_acc = 0
 
         # iterate over all epochs
+        list_acc = {'train': [], 'val': []}
+        list_loss = {'train': [], 'val': []}
         for epoch in range(epochs):
             tic = timer()
             print('Epoch {}/{}'.format(epoch + 1, epochs))
@@ -1163,6 +1168,8 @@ class CON2(nn.Module):
                 epoch_acc = running_corrects / len(data_loader[phase].dataset)
 
                 # print the statistics of the current epoch
+                list_acc[phase].append(epoch_acc)
+                list_loss[phase].append(epoch_loss)
                 print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
 
                 # deep copy the model
@@ -1187,4 +1194,4 @@ class CON2(nn.Module):
         if early_stop:
             self.load_state_dict(best_weights)
 
-        return self
+        return list_acc, list_loss

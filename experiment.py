@@ -31,7 +31,7 @@ from Bio import SeqIO
 DEBUGGING = False
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [True, True, False, False, False, False, True]
+DEBUG_STEPS = [True, True, True, True, False, False, True]
 
 
 name = 'example_experiment'
@@ -181,7 +181,7 @@ def test_exp():
     extension = 'fasta'
     kmer_size = 3
     alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
-    nb_epochs = 10
+    nb_epochs = 100
 
     # create dictionary that maps kmers to index
     kmer_dict = kmer2dict(kmer_size, alphabet)
@@ -197,8 +197,10 @@ def test_exp():
     #model = CON2(out_channels_list=[40, 32, 64, 128, 512, 1024], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5, 10],
     #             strides=[1, 1, 1, 1, 1, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME', 'SAME'], num_classes=3,
     #             kernel_args=[1.25, 1])
-    model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3,
-                 kernel_args=[1.25, 1])
+    #model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3,
+    #             kernel_args=[1.25, 1])
+    model = CON2(out_channels_list=[40, 100], ref_kmerPos=ref_pos, filter_sizes=[3], strides=[1, 1], paddings=['SAME'],
+                 num_classes=3, kernel_args=[1.25, 1])
 
     # load data
     data_all = CustomHandler(filepath)
@@ -499,7 +501,11 @@ def test_exp():
     # DEBUGGING END
 
     # train model
-    model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=nb_epochs)
+    acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=nb_epochs)
+
+    # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+    # model
+    torch.save(model.state_dict(), "CON_k" + str(kmer_size) + "_epochs" + str(nb_epochs) + ".pt")
 
     # register a forward hook on the oligo kernel layer to inspect the kernel embedding
     hook_oligo = Hook(list(model._modules.items())[0][1])
@@ -532,17 +538,33 @@ def test_exp():
         labels.append(aux_lab)
 
     # visualize embeddings as heatmaps
-    fig, axs = plt.subplots(len(kernel_embeddings), len(kernel_embeddings[0]))
+    fig, axs = plt.subplots(len(kernel_embeddings[0]), len(kernel_embeddings))
     for i in range(len(kernel_embeddings)):
         for j in range(len(kernel_embeddings[0])):
-            im = axs[i, j].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
-            axs[i, j].set_title("target = %s" % str(labels[i][j]))
-            fig.colorbar(im, ax=axs[i, j])
+            if len(kernel_embeddings[i]) != len(kernel_embeddings[0]):
+                continue
+            im = axs[j, i].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
+            axs[j, i].set_title("%s" % str(labels[i][j]))
+            axs[j, i].set(xlabel='position', ylabel='anchor point')
+            axs[j, i].label_outer()
+            fig.colorbar(im, ax=axs[j, i])
     plt.show()
 
-    # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
-    # model
-    torch.save(model.state_dict(), "CON_k" + str(kmer_size) + "_epochs" + str(nb_epochs) + ".pt")
+    # show the evolution of the acc and loss
+    fig2, axs2 = plt.subplots(2, 2)
+    axs2[0, 0].plot(acc['train'])
+    axs2[0, 0].set_title("train accuracy")
+    axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
+    axs2[0, 1].plot(acc['val'])
+    axs2[0, 1].set_title("val accuracy")
+    axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
+    axs2[1, 0].plot(loss['train'])
+    axs2[1, 0].set_title("train loss")
+    axs2[1, 0].set(xlabel='epoch', ylabel='loss')
+    axs2[1, 1].plot(loss['val'])
+    axs2[1, 1].set_title("val loss")
+    axs2[1, 1].set(xlabel='epoch', ylabel='loss')
+    plt.show()
 
     # iterate through dataset
     #for i_batch, sample_batch in enumerate(loader):
