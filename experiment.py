@@ -28,10 +28,10 @@ from Bio import SeqIO
 # MACROS
 
 # set to True to enable network debugging
-DEBUGGING = False
+DEBUGGING = True
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [True, True, True, True, False, False, True]
+DEBUG_STEPS = [True, True, False, False, True, False, False]
 
 
 name = 'example_experiment'
@@ -177,7 +177,7 @@ def test_exp():
     # set parameters for the test run
     #filepath = './data/processed_PI_DataSet_sample_labels_clean.fasta'
     filepath = './data/test_dataset.fasta'
-    class_count, expected_loss = count_classes(filepath)
+    class_count, expected_loss = count_classes(filepath, True)
     extension = 'fasta'
     kmer_size = 3
     alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
@@ -280,7 +280,9 @@ def test_exp():
 
         # STEP 4: visualize the gradient flow
         if DEBUG_STEPS[3]:
-            print("\n\n********* DEBUGGING STEP 4 *********\n    -> visualize the gradient flow through the network\n")
+            print("\n\n********* DEBUGGING STEP 4 *********\n    -> visualize the gradient flow through the network\n" +
+                  "    -> re-initialize the network to overwrite the gradients from the overfitting")
+            model.initialize()
             for phi, target, *_ in loader_train:
                 phi.requires_grad = False
                 data = torch.zeros(phi.size(0), 2, phi.size(-1))
@@ -331,9 +333,9 @@ def test_exp():
 
             # check the gradient of the convolutional oligo kernel layer
             print("gradient checking for convolutional oligo kernel layer...")
-            in_tuple = (torch.randn(4, 2, ref_pos.size(1), dtype=torch.double, requires_grad=False),
+            in_tuple = (torch.randn(4, 2, ref_pos.size(1), dtype=torch.double, requires_grad=True),
                         torch.randn(4, len(kmer_dict), ref_pos.size(1), dtype=torch.double, requires_grad=False))
-            test = gradcheck(model.con_model[0], in_tuple, eps=1e-6, atol=1e-4)
+            test = gradcheck(model.oligo, in_tuple, eps=1e-6, atol=1e-4)
             print("Result: {}\n".format(test))
 
             # check the gradient of the loss function

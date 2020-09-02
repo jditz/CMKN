@@ -151,38 +151,29 @@ class CONLayer(nn.Conv1d):
         # evaluate kernel function with the calculated dot product
         x_out = self.kappa(x_out)
 
-        # iterate over all anchor points and get their positions
-        z_pos = []
-        for i in range(self.out_channels):
-            # convert 2d coordinates into sequence position
-            seq_pos = (np.arccos(self.weight[i, 0].item()) / np.pi) * (in_size[-1] - 1)
-
-            # in most cases, the calculated position will be a floating point number
-            #   -> we need to get the integer and fractual part of this number
-            z_pos.append(math.modf(seq_pos))
+        # get the sequence position of each anchor point
+        z_pos = (torch.acos(self.weight[:, 0]) / np.pi) * (in_size[-1] - 1)
 
         # initialize the tensor that holds <phi(x), phi(z)>
         dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]])
 
         # fill out the dot product tensor by iterating in following order
         #   1. over all positions
-        #   2. over all anchor points
-        #   3. over the batch size
+        #   2. over the batch size
         for i in range(in_size[-1]):
-            for j in range(self.out_channels):
-                for k in range(in_size[0]):
-                    # calculate the phi(z) vector for the current anchor point
-                    #   -> since the position will be a float in most cases, this vector is a weighted combination
-                    #      from two positions in self.ref_kmerPos
-                    #   -> make sure to prevent out of index errors
-                    if int(z_pos[j][1]) < (in_size[-1] - 1):
-                        phi_z = ((1 - z_pos[j][0]) * self.ref_kmerPos[:, int(z_pos[j][1])] +
-                                     z_pos[j][0] * self.ref_kmerPos[:, int(z_pos[j][1]) + 1]) / 2
-                    else:
-                        phi_z = self.ref_kmerPos[:, int(z_pos[j][1])]
+            for j in range(in_size[0]):
+                # calculate the phi(z) vector for the current anchor point
+                #   -> since the position will be a float in most cases, this vector is a weighted combination
+                #      from two positions in self.ref_kmerPos
+                #   -> make sure to prevent out of index errors
+                if all(z_pos < (in_size[-1] - 1)):
+                    phi_z = ((1 - (z_pos % 1)) * self.ref_kmerPos[:, (z_pos // 1).numpy()] +
+                             (z_pos % 1) * self.ref_kmerPos[:, (z_pos // 1).numpy() + 1]) / 2
+                else:
+                    phi_z = self.ref_kmerPos[:, (z_pos // 1).numpy()]
 
-                    # calculate the dot product
-                    dot_phi[k, j, i] = torch.dot(phi[k, :, i], phi_z.type(x_in.type()))
+                # calculate the dot product
+                dot_phi[j, :, i] = torch.dot(phi[j, :, i], phi_z.type(x_in.type()))
 
         # multiply kernel function evaluation with the position comparison term
         x_out = dot_phi * x_out
