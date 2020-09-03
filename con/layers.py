@@ -153,9 +153,10 @@ class CONLayer(nn.Conv1d):
 
         # get the sequence position of each anchor point
         z_pos = (torch.acos(self.weight[:, 0]) / np.pi) * (in_size[-1] - 1)
+        z_pos = z_pos.detach()
 
         # initialize the tensor that holds <phi(x), phi(z)>
-        dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]])
+        dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]], requires_grad=False)
 
         # fill out the dot product tensor by iterating in following order
         #   1. over all positions
@@ -173,7 +174,8 @@ class CONLayer(nn.Conv1d):
                     phi_z = self.ref_kmerPos[:, (z_pos // 1).numpy()]
 
                 # calculate the dot product
-                dot_phi[j, :, i] = torch.dot(phi[j, :, i], phi_z.type(x_in.type()))
+                dot_phi[j, :, i] = torch.bmm(phi[j, :, i].view(1, 1, -1),
+                                             phi_z.type(x_in.type()).view(1, -1, len(z_pos)))
 
         # multiply kernel function evaluation with the position comparison term
         x_out = dot_phi * x_out

@@ -126,7 +126,7 @@ def build_kmer_ref(filepath, extension, kmer_dict, kmer_size):
     first_record = next(SeqIO.parse(filepath, extension))
 
     # initialize the tensor holding the kmer reference positions
-    ref_pos = torch.zeros(len(kmer_dict), len(first_record.seq))
+    ref_pos = torch.zeros(len(kmer_dict), len(first_record.seq), requires_grad=False)
 
     # keep track of the number of sequences in the dataset
     data_size = 0

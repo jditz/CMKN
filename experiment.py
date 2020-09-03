@@ -31,7 +31,7 @@ from Bio import SeqIO
 DEBUGGING = True
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [True, True, False, False, True, False, False]
+DEBUG_STEPS = [True, True, False, False, True, False, True]
 
 
 name = 'example_experiment'
@@ -200,7 +200,7 @@ def test_exp():
     #model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3,
     #             kernel_args=[1.25, 1])
     model = CON2(out_channels_list=[40, 100], ref_kmerPos=ref_pos, filter_sizes=[3], strides=[1, 1], paddings=['SAME'],
-                 num_classes=3, kernel_args=[1.25, 1])
+                 num_classes=3, kernel_args=[8, 100])
 
     # load data
     data_all = CustomHandler(filepath)
@@ -379,14 +379,16 @@ def test_exp():
                 labels.append(aux_lab)
 
             # visualize embeddings as heatmaps
-            fig, axs = plt.subplots(len(kernel_embeddings), len(kernel_embeddings[0]))
+            fig, axs = plt.subplots(len(kernel_embeddings[0]), len(kernel_embeddings))
             for i in range(len(kernel_embeddings)):
                 for j in range(len(kernel_embeddings[0])):
-                    im = axs[i, j].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
-                    axs[i, j].set_title("target = %s" % str(labels[i][j]))
-                    axs[i, j].set(xlabel='position', ylabel='anchor point')
-                    axs[i, j].label_outer()
-                    fig.colorbar(im, ax=axs[i, j])
+                    if len(kernel_embeddings[i]) != len(kernel_embeddings[0]):
+                        continue
+                    im = axs[j, i].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
+                    axs[j, i].set_title("target = %s" % str(labels[i][j]))
+                    axs[j, i].set(xlabel='position', ylabel='anchor point')
+                    axs[j, i].label_outer()
+                    fig.colorbar(im, ax=axs[j, i])
             plt.show()
 
         # register forward and backward hooks
