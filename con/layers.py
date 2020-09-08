@@ -552,7 +552,13 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
     def forward(self, input, proba=False):
         out = super(LinearMax, self).forward(input)
         if proba:
-            return out.sigmoid()
+            # activate with sigmoid function only for binary classification
+            if self.num_classes == 2:
+                return out.sigmoid()
+
+            # activate with log softmax function for multi-class classification
+            else:
+                return F.log_softmax(out, dim=1)
         return out
 
     def fit(self, x, y, criterion=None):

@@ -28,14 +28,14 @@ from Bio import SeqIO
 # MACROS
 
 # set to True to enable network debugging
-DEBUGGING = True
+DEBUGGING = False
 
 # each Boolean value decides if the corresponding debugging step will be performed
-DEBUG_STEPS = [True, True, False, False, True, False, True]
+DEBUG_STEPS = [True, True, True, True, False, False, True]
 
 
-name = 'example_experiment'
-data_dir = './data/'
+NAME = 'CON_experiment'
+DATA_DIR = './data/'
 
 
 # extend custom data handler for the used dataset
@@ -79,33 +79,42 @@ def load_args():
     """
     parser = argparse.ArgumentParser(description="CON example experiment")
     parser.add_argument('--seed', type=int, default=1, metavar='S', help='random seed (default: 1)')
-    parser.add_argument('--batch-size', type=int, default=128, metavar='M',
-                        help='input batch size for training (default: 128)')
-    parser.add_argument('--epochs', type=int, default=100, metavar='N', help='number of epochs to train (default: 100)')
-    parser.add_argument("--num-anchors", dest="n_anchors", metavar="m", default=[64], nargs='+', type=int,
-                        help="number of anchor points for each layer (default [64])")
-    parser.add_argument("--subsamplings", dest="subsamplings", metavar="s", default=[1], nargs='+', type=int,
-                        help="subsampling for each layer (default: [1])")
-    parser.add_argument("--sigma", dest="kernel_params", default=[0.3], nargs='+', type=float,
-                        help="sigma for each layer (default: [0.3])")
-    parser.add_argument("--scale", dest="scale_param", default=100, type=int,
-                        help="scaling parameter for the convolutional kernel layer (Default: 100)")
-    parser.add_argument("--sampling-patches", dest="n_sampling_patches", default=250000, type=int,
-                        help="number of sampled patches (default: 250000)")
+    parser.add_argument('--batch-size', dest="batch_size", type=int, default=4, metavar='M',
+                        help='input batch size for training (default: 4)')
+    parser.add_argument('--epochs', dest="nb_epochs", type=int, default=10, metavar='N',
+                        help='number of epochs to train (default: 50)')
+    parser.add_argument("--out-channels", dest="out_channels", metavar="m", default=[40, 128, 512, 1024], nargs='+',
+                        type=int,
+                        help="number of out channels for each oligo kernel and conv layer (default [40, 128, 512, 1024])")
+    parser.add_argument("--strides", dest="strides", metavar="s", default=[1, 1, 1, 1], nargs='+', type=int,
+                        help="stride value for each layer (default: [1, 1, 1, 1])")
+    parser.add_argument("--paddings", dest="paddings", metavar="p", default=['SAME', 'SAME', 'SAME'], nargs="+",
+                        type=str, help="padding values for each convolutional layer (default ['SAME', 'SAME', 'SAME'])")
+    parser.add_argument("--kernel-sizes", dest="kernel_sizes", metavar="k", default=[5, 5, 9], nargs="+", type=int,
+                        help="kernel sizes for oligo and convolutional layers (default [5, 5, 9])")
+    parser.add_argument("--sigma", dest="sigma", default=4, type=float,
+                        help="sigma for the oligo kernel layer (default: 4)")
+    parser.add_argument("--scale", dest="scale", default=100, type=int,
+                        help="scaling parameter for the oligo kernel layer (Default: 100)")
+    parser.add_argument("--kmer", dest="kmer_size", default=3, type=int,
+                        help="length of the k-mers used for the oligo kernel layer (default 3)")
+    parser.add_argument("--num-classes", dest="num_classes", default=3, type=int,
+                        help="number of classes in the prediction task")
     parser.add_argument("--kfold", dest="kfold", default=5, type=int, help="k-fold cross validation (default: 5)")
-    parser.add_argument("--ntrials", dest="ntrials", default=1, type=int,
-                        help="number of trials for training (default: 1)")
     parser.add_argument("--penalty", metavar="penal", dest="penalty", default='l2', type=str, choices=['l2', 'l1'],
                         help="regularization used in the last layer (default: l2)")
+    parser.add_argument("--regularization", type=float, default=1e-6,
+                        help="regularization parameter for sup CON")
+    parser.add_argument("--preprocessor", type=str, default='standard_row', choices=['standard_row', 'standard_col'],
+                        help="preprocessor for last layer of CON (default: standard_row)")
     parser.add_argument("--outdir", metavar="outdir", dest="outdir", default='output', type=str,
                         help="output path(default: '')")
-    parser.add_argument("--regularization", type=float, default=1e-6, help="regularization parameter for CON model")
-    parser.add_argument("--preprocessor", type=str, default='standard_row', choices=['standard_row', 'standard_col'],
-                        help="preprocessor for CON (default: standard_row)")
     parser.add_argument("--use-cuda", action='store_true', default=False, help="use gpu (default: False)")
-    parser.add_argument("--pooling", default='sum', choices=['mean', 'max', 'sum'], type=str,
-                        help='specifies global pooling layer (default: sum)')
     parser.add_argument("--noise", type=float, default=0.0, help="perturbation percent")
+    parser.add_argument("--file", dest="filepath", default="./data/test_dataset.fasta", type=str,
+                        help="path to the file containing the dataset.")
+    parser.add_argument("--extension", dest="extension", default="fasta", type=str,
+                        help="extension of the file containing the dataset (default fasta)")
 
     # parse the arguments
     args = parser.parse_args()
@@ -114,12 +123,13 @@ def load_args():
     args.use_cuda = args.use_cuda and torch.cuda.is_available()
 
     # 'num-anchors', 'subsampling', and 'sigma' have to be of same length
-    if not len(args.n_anchors) == len(args.subsampling) == len(args.kernel_params):
-        raise ValueError('Mismatching lengths!\nVectors given for the arguments --num-anchors, --subsampling, and '
-                         '--sigma have to be of same length')
+    if not len(args.out_channels) == len(args.strides) == len(args.paddings) + 1 == len(args.kernel_sizes) + 1:
+        raise ValueError('The size combination of out_channels, strides, paddings, and kernel_sizes is invalid!\n' +
+                         'out_channels and strides have to have the same length while the length of paddings and ' +
+                         'kernel_sizes have to be one less than the other two.')
 
     # number of layers is equal to length of the 'num-anchors' vector
-    args.n_layer = len(args.n_anchors)
+    args.n_layer = len(args.out_channels)
 
     # set the random seeds
     torch.manual_seed(args.seed)
@@ -137,32 +147,31 @@ def load_args():
                 os.makedirs(outdir)
             except:
                 pass
-        outdir = outdir + "/{}".format(name)
+        outdir = outdir + "/{}".format(NAME)
         if not os.path.exists(outdir):
             try:
                 os.makedirs(outdir)
             except:
                 pass
-        outdir = outdir + "/noise_{}".format(args.noise)
+        outdir = outdir + "/kmer_{}".format(args.kmer_size)
         if not os.path.exists(outdir):
             try:
                 os.makedirs(outdir)
             except:
                 pass
-        outdir = outdir + "/{}".format(args.pooling)
+        outdir = outdir + "/params_{}_{}".format(args.sigma, args.scale)
         if not os.path.exists(outdir):
             try:
                 os.makedirs(outdir)
             except:
                 pass
-        outdir = outdir + '/{}_{}_{}'.format(
-            args.n_layers, args.n_anchors, args.subsamplings)
+        outdir = outdir + '/anchors_{}'.format(args.out_channels[0])
         if not os.path.exists(outdir):
             try:
                 os.makedirs(outdir)
             except:
                 pass
-        outdir = outdir + '/{}'.format(args.kernel_params)
+        outdir = outdir + '/layers_{}'.format(args.n_layer)
         if not os.path.exists(outdir):
             try:
                 os.makedirs(outdir)
@@ -176,39 +185,45 @@ def load_args():
 def test_exp():
     # set parameters for the test run
     #filepath = './data/processed_PI_DataSet_sample_labels_clean.fasta'
-    filepath = './data/test_dataset.fasta'
-    class_count, expected_loss = count_classes(filepath, True)
-    extension = 'fasta'
-    kmer_size = 3
+    #filepath = './data/test_dataset.fasta'
+    #class_count, expected_loss = count_classes(filepath, True)
+    #extension = 'fasta'
+    #kmer_size = 3
+    #alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
+    #nb_epochs = 5
+    args = load_args()
+    class_count, expected_loss = count_classes(args.filepath, True)
     alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
-    nb_epochs = 100
 
     # create dictionary that maps kmers to index
-    kmer_dict = kmer2dict(kmer_size, alphabet)
+    kmer_dict = kmer2dict(args.kmer_size, alphabet)
 
     # build tensor holding reference positions
-    ref_pos = build_kmer_ref(filepath, extension, kmer_dict, kmer_size)
+    ref_pos = build_kmer_ref(args.filepath, args.extension, kmer_dict, args.kmer_size)
 
     # initialize con model
     #model = CON([40, 128], ref_pos, [3], [1, 3], num_classes=3, kernel_funcs=['exp', 'exp_chen'],
     #            kernel_args_list=[[1.25, 1], [0.5]], kernel_args_trainable=[False, False])
     #model = CON([40], ref_pos, [], [1], num_classes=3, kernel_funcs=['exp'],
     #            kernel_args_list=[[0.5, 1]], kernel_args_trainable=[False])
-    #model = CON2(out_channels_list=[40, 32, 64, 128, 512, 1024], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5, 10],
+    #model = CON2(out_channels_list=[40, 32, 64, 128, 512, 1024], ref_kmerPos=ref_pos, filter_sizes=[3, 5, 5, 5, 9],
     #             strides=[1, 1, 1, 1, 1, 1], paddings=['SAME', 'SAME', 'SAME', 'SAME', 'SAME'], num_classes=3,
-    #             kernel_args=[1.25, 1])
+    #             kernel_args=[4, 10])
     #model = CON2(out_channels_list=[40], ref_kmerPos=ref_pos, filter_sizes=[], strides=[1], paddings=[], num_classes=3,
-    #             kernel_args=[1.25, 1])
-    model = CON2(out_channels_list=[40, 100], ref_kmerPos=ref_pos, filter_sizes=[3], strides=[1, 1], paddings=['SAME'],
-                 num_classes=3, kernel_args=[8, 100])
+    #             kernel_args=[4, 10])
+    #model = CON2(out_channels_list=[40, 100], ref_kmerPos=ref_pos, filter_sizes=[3], strides=[1, 1], paddings=['SAME'],
+    #             num_classes=3, kernel_args=[4, 10])
+    model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
+                 strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
+                 kernel_args=[args.sigma, args.scale])
 
     # load data
-    data_all = CustomHandler(filepath)
+    data_all = CustomHandler(args.filepath)
 
     # Creating data indices for training and validation splits:
     validation_split = .2
     shuffle_dataset = True
-    random_seed = 42
+    random_seed = args.seed
     dataset_size = len(data_all)
     indices = list(range(dataset_size))
     split = int(np.floor(validation_split * dataset_size))
@@ -221,8 +236,8 @@ def test_exp():
     data_train = Subset(data_all, train_indices)
     data_val = Subset(data_all, val_indices)
 
-    loader_train = DataLoader(data_train, batch_size=4)
-    loader_val = DataLoader(data_val, batch_size=4)
+    loader_train = DataLoader(data_train, batch_size=args.batch_size)
+    loader_val = DataLoader(data_val, batch_size=args.batch_size)
 
     # initialize optimizer and loss function
     #criterion = nn.BCEWithLogitsLoss()
@@ -505,11 +520,13 @@ def test_exp():
     # DEBUGGING END
 
     # train model
-    acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val, epochs=nb_epochs)
+    acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
+                                epochs=args.nb_epochs)
 
     # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
     # model
-    torch.save(model.state_dict(), "CON_k" + str(kmer_size) + "_epochs" + str(nb_epochs) + ".pt")
+    torch.save({'args': args, 'state_dict': model.state_dict()},
+               args.outdir + "/CON_k" + str(args.kmer_size) + "_epochs" + str(args.nb_epochs) + ".pkl")
 
     # register a forward hook on the oligo kernel layer to inspect the kernel embedding
     hook_oligo = Hook(list(model._modules.items())[0][1])
@@ -552,7 +569,8 @@ def test_exp():
             axs[j, i].set(xlabel='position', ylabel='anchor point')
             axs[j, i].label_outer()
             fig.colorbar(im, ax=axs[j, i])
-    plt.show()
+    #plt.show()
+    plt.savefig(args.outdir + "/kernel_embedding.png")
 
     # show the evolution of the acc and loss
     fig2, axs2 = plt.subplots(2, 2)
@@ -568,22 +586,19 @@ def test_exp():
     axs2[1, 1].plot(loss['val'])
     axs2[1, 1].set_title("val loss")
     axs2[1, 1].set(xlabel='epoch', ylabel='loss')
-    plt.show()
+    #plt.show()
+    plt.savefig(args.outdir + "/acc_loss.png")
 
-    # iterate through dataset
-    #for i_batch, sample_batch in enumerate(loader):
-    #    print('shape of batch {}: {}'.format(i_batch, sample_batch[0].shape))
-    #    print('shape of target {}: {}'.format(i_batch, sample_batch[1].shape))
-    #    print('')
-
-    # perform "testing" using the validation data point (only for debugging purpose)
-    #y_pred, y_true = model.predict(loader_val, proba=True)
-    #scores = torch.sum(torch.sum(y_pred == y_true, 1) == torch.ones(y_pred.shape[0]) * y_true.shape[1]).item()
-
-    # compute_metrics might only work for binary classification
-    #scores = compute_metrics(y_pred, y_true)
-
-    #print(scores)
+    # show the position of the anchor points as a histogram
+    anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
+    anchor = anchor.detach().numpy()
+    fig3 = plt.figure()
+    plt.hist(anchor, bins=20)
+    plt.xlabel('Position')
+    plt.ylabel('# Anchor Points')
+    plt.title('Distribution of anchor points')
+    #plt.show()
+    plt.savefig(args.outdir + "/anchor_positions.png")
 
 
 def count_classes(filepath, verbose=False):

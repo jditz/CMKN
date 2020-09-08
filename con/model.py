@@ -715,8 +715,8 @@ class CON2(nn.Module):
     """
 
     def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
-                 kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batchNorm=True, dropout=False,
-                 pool='mean', global_pool='mean', penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
+                 kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batch_norm=True, dropout=False,
+                 pool='mean', penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
         """Constructor of the CON class.
 
         - **Parameters**::
@@ -763,7 +763,7 @@ class CON2(nn.Module):
             :raise ValueError if out_channels_list, filter_sizes, and subsamplings are not of the same length.
         """
 
-        # out_channels_list, filter_sizes, and subsamplings have to be of same length
+        # check if out_channels_list, strides, filter_sizes, and paddings have an acceptable length
         #   -> therefore, raise an AssertionError if the lengths differ
         if not len(out_channels_list) == len(strides) == len(filter_sizes) + 1 == len(paddings) + 1:
             raise ValueError('Incompatible dimensions! \n'
@@ -810,7 +810,7 @@ class CON2(nn.Module):
                                         stride=1, padding=padding))
 
             # perform batch normalization after each conv layer (if set to True)
-            if batchNorm:
+            if batch_norm:
                 convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
 
             # use rectifiedLinearUnit as activation function
@@ -826,19 +826,15 @@ class CON2(nn.Module):
         # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
         self.conv = nn.Sequential(*convlayers)
 
-        # initialize the global pooling layer
-        #self.global_pool = POOLINGS[global_pool]()
-
         # set the number of output features
         #   -> this is the number of output channels of the last CON layer
         self.out_features = out_channels_list[-1] * self.seq_len
 
         # initialize the classification layer
         self.initialize_scaler(scaler)
-        #self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
         self.fc = nn.Linear(self.out_features, self.num_classes*100, fit_bias)
         self.classifier = nn.Linear(self.num_classes*100, self.num_classes, fit_bias)
-
+        #self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias, penalty=penalty)
 
     def initialize_scaler(self, scaler=None):
         pass
@@ -865,7 +861,6 @@ class CON2(nn.Module):
         """
         output = self.oligo(input, phi)
         output = self.conv(output)
-        #output = self.global_pool(output)
         output = output.view(output.size(0), -1)
         output = self.fc(output)
         output = self.classifier(output)
@@ -937,8 +932,18 @@ class CON2(nn.Module):
 
         # iterate over all samples
         batch_start = 0
-        for i, (data, target, *_) in enumerate(data_loader):
-            batch_size = data.shape[0]
+        for i, (phi, target, *_) in enumerate(data_loader):
+            batch_size = phi.shape[0]
+            phi.requires_grad = False
+            data = torch.zeros(phi.size(0), 2, phi.size(-1))
+            for j in range(phi.size(-1)):
+                # project current position on the upper half of the unit circle
+                x_circle = np.cos(((j + 1) / phi.size(-1)) * np.pi)
+                y_circle = np.sin(((j + 1) / phi.size(-1)) * np.pi)
+
+                # fill the input tensor
+                data[:, 0, j] = x_circle
+                data[:, 1, j] = y_circle
 
             # transfer sample data to GPU if computations are performed there
             if use_cuda:
@@ -947,8 +952,10 @@ class CON2(nn.Module):
             # do not keep track of the gradients during the forward propagation
             with torch.no_grad():
                 if only_representation:
-                    batch_out = self.con_model(data)
-                    batch_out = self.global_pool(batch_out).data.cpu()
+                    batch_out = self.oligo(data, phi)
+                    batch_out = self.conv(batch_out)
+                    batch_out = batch_out.view(batch_size, -1)
+                    batch_out = self.fc(batch_out)
                 else:
                     batch_out = self(data, proba).data.cpu()
 
