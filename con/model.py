@@ -1115,6 +1115,7 @@ class CON2(nn.Module):
                     # if the computations take place on the GPU, send data to GPU
                     if use_cuda:
                         data = data.cuda()
+                        phi = phi.cuda()
                         target = target.cuda()
 
                     # zero the parameter gradients

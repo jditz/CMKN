@@ -10,18 +10,15 @@ import argparse
 
 from torch.utils.data import DataLoader
 import torch
-from torch import nn, autograd
 from torch.utils.data import Subset
-from torch.optim.lr_scheduler import StepLR, MultiStepLR, ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.autograd import gradcheck
 import torch.optim as optim
 import numpy as np
 
-from con import (CON, CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref, category_from_output,
-                 compute_metrics, plot_grad_flow, Hook)# register_hooks
+from con import (CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref,
+                 plot_grad_flow, Hook)
 
-import matplotlib.pyplot as plt
-from timeit import default_timer as timer
 from Bio import SeqIO
 
 
@@ -184,19 +181,12 @@ def load_args():
 
 def test_exp():
     # set parameters for the test run
-    #filepath = './data/processed_PI_DataSet_sample_labels_clean.fasta'
-    #filepath = './data/test_dataset.fasta'
-    #class_count, expected_loss = count_classes(filepath, True)
-    #extension = 'fasta'
-    #kmer_size = 3
-    #alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
-    #nb_epochs = 5
     args = load_args()
-    class_count, expected_loss = count_classes(args.filepath, True)
-    alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
+    args.class_count, args.expected_loss = count_classes(args.filepath, True)
+    args.alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
 
     # create dictionary that maps kmers to index
-    kmer_dict = kmer2dict(args.kmer_size, alphabet)
+    kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
 
     # build tensor holding reference positions
     ref_pos = build_kmer_ref(args.filepath, args.extension, kmer_dict, args.kmer_size)
@@ -242,7 +232,7 @@ def test_exp():
     # initialize optimizer and loss function
     #criterion = nn.BCEWithLogitsLoss()
     #criterion = nn.CrossEntropyLoss()
-    criterion = ClassBalanceLoss(class_count, len(class_count), 'cross_entropy', 0.99, 1.0)
+    criterion = ClassBalanceLoss(args.class_count, len(args.class_count), 'cross_entropy', 0.99, 1.0)
     optimizer = optim.Adam(model.parameters(), lr=0.1)
     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
@@ -278,7 +268,7 @@ def test_exp():
                 loss = criterion(out, target.argmax(1))
                 running_loss += loss.item() * data.size(0)
             init_loss = running_loss / len(loader_train.dataset)
-            print("\ninitial loss: {}; expected loss: {}".format(init_loss, expected_loss))
+            print("\ninitial loss: {}; expected loss: {}".format(init_loss, args.expected_loss))
 
         # STEP 3: train model on a single data point and see if it can overfit
         if DEBUG_STEPS[2]:
@@ -363,6 +353,8 @@ def test_exp():
         if DEBUG_STEPS[6]:
             print("\n\n********* DEBUGGING STEP 7 *********\n    -> visualize the oligo kernel embedding\n")
 
+            import matplotlib.pyplot as plt
+
             # register a forward hook on the oligo kernel layer to inspect the kernel embedding
             hook_oligo = Hook(list(model._modules.items())[0][1])
 
@@ -405,115 +397,6 @@ def test_exp():
                     axs[j, i].label_outer()
                     fig.colorbar(im, ax=axs[j, i])
             plt.show()
-
-        # register forward and backward hooks
-        # hookF = [Hook(list(list(model._modules.items())[0][1])[0])]
-        # hookF.append(Hook(list(list(model._modules.items())[0][1])[1]))
-        # hookF.append(Hook(list(model._modules.items())[1][1]))
-        # hookF.append(Hook(list(model._modules.items())[2][1]))
-        # hookB = [Hook(list(list(model._modules.items())[0][1])[0], backward=True)]
-        # hookB.append(Hook(list(list(model._modules.items())[0][1])[1], backward=True))
-        # hookB.append(Hook(list(model._modules.items())[1][1], backward=True))
-        # hookB.append(Hook(list(model._modules.items())[2][1], backward=True))
-
-        #running_loss = 0.0
-        #running_corrects = 0
-        #aux_data = None
-        #for data, target, *_ in loader_train:
-            # with autograd.detect_anomaly():
-            #     # perform one forward step
-            #     out = model(data)
-            #
-            #     # register hooks on the out tensor
-            #     #get_dot = register_hooks(out)
-            #
-            #     # get the dot and save it
-            #     #dot = get_dot()
-            #     #dot.save('tmp.dot')
-            #
-            #     #print(target.shape[1])
-            #
-            #     # backprop to get backward hooks
-            #     #out.backward(target, retain_graph=True)
-            #     loss = criterion(out, target.argmax(1))
-            #     loss.backward()
-
-            # simulate epochs for a single data point
-            # for i in range(10):
-            #     out = model(data)
-            #
-            #     pred = torch.zeros(out.shape)
-            #     for j in range(out.shape[0]):
-            #         pred[j, category_from_output(out[i, :])] = 1
-            #
-            #     loss = criterion(out, target.argmax(1))
-            #     loss.backward()
-            #     optimizer.step()
-            #     model.normalize_()
-            #     plot_grad_flow(model.named_parameters())
-            #
-            #     running_loss += loss.item() * data.size(0)
-            #     running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
-            #                                   torch.ones(pred.shape[0]) * pred.shape[1]).item()
-            #     print(running_loss, running_corrects)
-            #
-            # return
-
-            #out = model(data)
-            #aux_data = (out, target)
-            #pred = torch.zeros(out.shape)
-            #for j in range(out.shape[0]):
-            #    pred[j, category_from_output(out[j, :])] = 1
-
-            #loss = criterion(out, target.argmax(1))
-
-            #optimizer.zero_grad()
-            #loss.backward()
-
-            #aux = data.clone().detach().requires_grad_(True)
-            #print("gradCheck: {}".format(gradcheck(model, (aux,))))
-
-            #optimizer.step()
-            #model.normalize_()
-            #plot_grad_flow(model.named_parameters())
-
-            #running_loss += loss.item() * data.size(0)
-            #running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
-            #                              torch.ones(pred.shape[0]) * pred.shape[1]).item()
-
-            # print hooks
-            # print()
-            # print('***' * 4 + '  Forward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
-            # for hook in hookF:
-            #     try:
-            #         print([x.shape for x in hook.input])#(hook.input)#.shape)
-            #     except:
-            #         print(hook.input[0].shape, hook.input[1:])
-            #     print(hook.output.shape)#.shape)
-            #     print('\n' + '---' * 27 + '\n')
-            # print('\n')
-            # print('***' * 4 + '  Backward Hooks Inputs & Outputs  ' + '***' * 4 + '\n')
-            # for hook in hookB:
-            #     print([x.shape for x in hook.input])#(hook.input)#.shape)
-            #     print([x.shape for x in hook.output])#(hook.output)#.shape)
-            #     print('\n' + '---' * 27 + '\n')
-            #
-            # # print the output of the CON layer as a heatmap
-            # print('\nThe correct labels are: {}'.format(target))
-            # items = [0, 1, 2, 3]
-            # fig, axs = plt.subplots(2, 2)
-            # for item, ax in zip(items, axs.ravel()):
-            #     im = ax.imshow(hookF[0].output[item, :, :].detach().numpy(), cmap='hot', interpolation=None, aspect='auto')
-            #     ax.set_title("target = %s" % str(target[item, :]))
-            #     fig.colorbar(im, ax=ax)
-            # plt.show()
-
-        #def apply_fn(input, *params):
-        #    return criterion(input, aux_data[1].argmax(1))
-        #gradcheck(apply_fn, aux_data[0])
-
-        #print("initial loss: {}".format(running_loss / len(loader_train.dataset)))
-        #print("initial accuracy: {}".format(running_corrects / len(loader_train.dataset)))
 
         return
 
@@ -558,47 +441,60 @@ def test_exp():
         kernel_embeddings.append(aux_emb)
         labels.append(aux_lab)
 
-    # visualize embeddings as heatmaps
-    fig, axs = plt.subplots(len(kernel_embeddings[0]), len(kernel_embeddings))
-    for i in range(len(kernel_embeddings)):
-        for j in range(len(kernel_embeddings[0])):
-            if len(kernel_embeddings[i]) != len(kernel_embeddings[0]):
-                continue
-            im = axs[j, i].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
-            axs[j, i].set_title("%s" % str(labels[i][j]))
-            axs[j, i].set(xlabel='position', ylabel='anchor point')
-            axs[j, i].label_outer()
-            fig.colorbar(im, ax=axs[j, i])
-    #plt.show()
-    plt.savefig(args.outdir + "/kernel_embedding.png")
+    # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+    # model
+    torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss,
+                'kernel_embeddings': kernel_embeddings, 'labels': labels},
+                args.outdir + "/CON_k" + str(args.kmer_size) + "_epochs" + str(args.nb_epochs) + ".pkl")
 
-    # show the evolution of the acc and loss
-    fig2, axs2 = plt.subplots(2, 2)
-    axs2[0, 0].plot(acc['train'])
-    axs2[0, 0].set_title("train accuracy")
-    axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
-    axs2[0, 1].plot(acc['val'])
-    axs2[0, 1].set_title("val accuracy")
-    axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
-    axs2[1, 0].plot(loss['train'])
-    axs2[1, 0].set_title("train loss")
-    axs2[1, 0].set(xlabel='epoch', ylabel='loss')
-    axs2[1, 1].plot(loss['val'])
-    axs2[1, 1].set_title("val loss")
-    axs2[1, 1].set(xlabel='epoch', ylabel='loss')
-    #plt.show()
-    plt.savefig(args.outdir + "/acc_loss.png")
+    try:
+        # try to import pyplot
+        import matplotlib.pyplot as plt
 
-    # show the position of the anchor points as a histogram
-    anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
-    anchor = anchor.detach().numpy()
-    fig3 = plt.figure()
-    plt.hist(anchor, bins=20)
-    plt.xlabel('Position')
-    plt.ylabel('# Anchor Points')
-    plt.title('Distribution of anchor points')
-    #plt.show()
-    plt.savefig(args.outdir + "/anchor_positions.png")
+        # visualize embeddings as heatmaps
+        fig, axs = plt.subplots(len(kernel_embeddings[0]), len(kernel_embeddings))
+        for i in range(len(kernel_embeddings)):
+            for j in range(len(kernel_embeddings[0])):
+                if len(kernel_embeddings[i]) != len(kernel_embeddings[0]):
+                    continue
+                im = axs[j, i].imshow(kernel_embeddings[i][j], cmap='hot', interpolation=None, aspect='auto')
+                axs[j, i].set_title("%s" % str(labels[i][j]))
+                axs[j, i].set(xlabel='position', ylabel='anchor point')
+                axs[j, i].label_outer()
+                fig.colorbar(im, ax=axs[j, i])
+        #plt.show()
+        plt.savefig(args.outdir + "/kernel_embedding.png")
+
+        # show the evolution of the acc and loss
+        fig2, axs2 = plt.subplots(2, 2)
+        axs2[0, 0].plot(acc['train'])
+        axs2[0, 0].set_title("train accuracy")
+        axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
+        axs2[0, 1].plot(acc['val'])
+        axs2[0, 1].set_title("val accuracy")
+        axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
+        axs2[1, 0].plot(loss['train'])
+        axs2[1, 0].set_title("train loss")
+        axs2[1, 0].set(xlabel='epoch', ylabel='loss')
+        axs2[1, 1].plot(loss['val'])
+        axs2[1, 1].set_title("val loss")
+        axs2[1, 1].set(xlabel='epoch', ylabel='loss')
+        #plt.show()
+        plt.savefig(args.outdir + "/acc_loss.png")
+
+        # show the position of the anchor points as a histogram
+        anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
+        anchor = anchor.detach().numpy()
+        fig3 = plt.figure()
+        plt.hist(anchor, bins=20)
+        plt.xlabel('Position')
+        plt.ylabel('# Anchor Points')
+        plt.title('Distribution of anchor points')
+        #plt.show()
+        plt.savefig(args.outdir + "/anchor_positions.png")
+
+    except:
+        print("Cannot import matplotlib.pyplot")
 
 
 def count_classes(filepath, verbose=False):
@@ -642,5 +538,5 @@ def main(filepath):
 
 if __name__ == '__main__':
     #main('./data/test_dataset.fasta')
-    count_classes('./data/processed_PI_DataSet_sample_labels_clean.fasta', True)
+    #count_classes('./data/processed_PI_DataSet_sample_labels_clean.fasta', True)
     test_exp()
