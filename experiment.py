@@ -37,8 +37,8 @@ DATA_DIR = './data/'
 
 # extend custom data handler for the used dataset
 class CustomHandler(CONDataset):
-    def __init__(self, filepath):
-        super(CustomHandler, self).__init__(filepath, alphabet='PROTEIN_AMBI')
+    def __init__(self, filepath, kmer_size=3):
+        super(CustomHandler, self).__init__(filepath, kmer_size=kmer_size, alphabet='PROTEIN_AMBI')
 
         self.all_categories = ['H', 'M', 'L']
 
@@ -208,7 +208,7 @@ def test_exp():
                  kernel_args=[args.sigma, args.scale])
 
     # load data
-    data_all = CustomHandler(args.filepath)
+    data_all = CustomHandler(args.filepath, kmer_size=args.kmer_size)
 
     # Creating data indices for training and validation splits:
     validation_split = .2
