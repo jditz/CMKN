@@ -17,7 +17,7 @@ import torch.optim as optim
 import numpy as np
 
 from con import (CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref,
-                 plot_grad_flow, Hook)
+                 plot_grad_flow, Hook, anchors_to_motivs)
 
 from Bio import SeqIO
 
@@ -532,6 +532,25 @@ def count_classes(filepath, verbose=False):
     return class_count, expected_loss
 
 
+def test_motiv():
+    params = torch.load('output/CON_experiment/kmer_3/params_4.0_10/anchors_40/layers_3/CON_k3_epochs10.pkl')
+    args = params['args']
+    state_dict = params['state_dict']
+
+    # create dictionary that maps kmers to index
+    kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
+
+    # build tensor holding reference positions
+    ref_pos = build_kmer_ref(args.filepath, args.extension, kmer_dict, args.kmer_size)
+
+    # convert anchor points into sequence positions
+    anchor = (torch.acos(state_dict['oligo.weight'][:, 0]) / np.pi) * (ref_pos.size(1) - 1)
+    anchor = anchor.detach().numpy()
+
+    # create motivs from the anchors
+    anchors_to_motivs(anchor, ref_pos, kmer_dict)
+
+
 def main(filepath):
     print('main')
 
@@ -539,4 +558,5 @@ def main(filepath):
 if __name__ == '__main__':
     #main('./data/test_dataset.fasta')
     #count_classes('./data/processed_PI_DataSet_sample_labels_clean.fasta', True)
-    test_exp()
+    test_motiv()
+    #test_exp()

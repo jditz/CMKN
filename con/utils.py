@@ -7,12 +7,14 @@
 
 import math
 import numpy as np
-from itertools import combinations, product
+from itertools import combinations, product, chain
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.autograd import Variable
-from Bio import SeqIO
+from Bio import SeqIO, motifs
+from Bio.Seq import Seq
+from Bio.Data import IUPACData
 
 import pandas as pd
 from scipy import stats
@@ -144,6 +146,150 @@ def build_kmer_ref(filepath, extension, kmer_dict, kmer_size):
 
     # divide every entry in the ref position tensor by the size of the dataset
     return ref_pos / data_size
+
+
+def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, type="amino"):
+    """Motiv creation
+
+    This function takes a list of anchor points, learned by the oligo kernel layer of a CON, and returns the motivs that are
+    represented by these anchor points
+
+    - **Parameters**::
+
+        :param anchor_points: List of anchor points, learned by an oligo kernel layer
+            :type anchor_points: List of floats
+        :param kmer_ref: Tensor storing the frequency with which every k-mer starts at each position in the dataset
+            :type kmer_ref: Tensor
+        :param kmer_dict: Dictionary mapping each k-mer to a index
+            :type kmer_dict: Dictionary
+    """
+    # import needed libraries
+    import matplotlib as mpl
+    from matplotlib.text import TextPath
+    from matplotlib.patches import PathPatch
+    from matplotlib.font_manager import FontProperties
+    import matplotlib.pyplot as plt
+
+    # initialize needed functionality
+    fp = FontProperties(family="Arial", weight="bold")
+    globscale = 1.35
+    if type == 'nucleotides':
+        LETTERS = {"T": TextPath((-0.305, 0), "T", size=1, prop=fp),
+                   "G": TextPath((-0.384, 0), "G", size=1, prop=fp),
+                   "U": TextPath((-0.384, 0), "U", size=1, prop=fp),
+                   "A": TextPath((-0.35, 0), "A", size=1, prop=fp),
+                   "C": TextPath((-0.366, 0), "C", size=1, prop=fp)}
+        COLOR_SCHEME = {'G': 'orange',
+                        'A': 'darkgreen',
+                        'C': 'blue',
+                        'T': 'red',
+                        'U': 'red'}
+    elif type == 'amino':
+        LETTERS = {"G": TextPath((-0.384, 0), "G", size=1, prop=fp),
+                   "S": TextPath((-0.366, 0), "C", size=1, prop=fp),
+                   "T": TextPath((-0.305, 0), "T", size=1, prop=fp),
+                   "Y": TextPath((-0.305, 0), "T", size=1, prop=fp),
+                   "C": TextPath((-0.366, 0), "C", size=1, prop=fp),
+                   "Q": TextPath((-0.366, 0), "C", size=1, prop=fp),
+                   "N": TextPath((-0.35, 0), "A", size=1, prop=fp),
+                   "K": TextPath((-0.35, 0), "A", size=1, prop=fp),
+                   "R": TextPath((-0.35, 0), "A", size=1, prop=fp),
+                   "H": TextPath((-0.35, 0), "A", size=1, prop=fp),
+                   "D": TextPath((-0.366, 0), "C", size=1, prop=fp),
+                   "E": TextPath((-0.366, 0), "C", size=1, prop=fp),
+                   "A": TextPath((-0.35, 0), "A", size=1, prop=fp),
+                   "V": TextPath((-0.305, 0), "T", size=1, prop=fp),
+                   "L": TextPath((-0.366, 0), "C", size=1, prop=fp),
+                   "I": TextPath((-0.305, 0), "T", size=1, prop=fp),
+                   "P": TextPath((-0.305, 0), "T", size=1, prop=fp),
+                   "W": TextPath((-0.35, 0), "A", size=1, prop=fp),
+                   "F": TextPath((-0.305, 0), "T", size=1, prop=fp),
+                   "M": TextPath((-0.35, 0), "A", size=1, prop=fp)}
+        COLOR_SCHEME = {'G': 'darkgreen',
+                        'S': 'darkgreen',
+                        'T': 'darkgreen',
+                        'Y': 'darkgreen',
+                        'C': 'darkgreen',
+                        'Q': 'darkgreen',
+                        'N': 'darkgreen',
+                        'K': 'blue',
+                        'R': 'blue',
+                        'H': 'blue',
+                        'D': 'red',
+                        'E': 'red',
+                        'A': 'black',
+                        'V': 'black',
+                        'L': 'black',
+                        'I': 'black',
+                        'P': 'black',
+                        'W': 'black',
+                        'F': 'black',
+                        'M': 'black'}
+    else:
+        raise ValueError('Unknown alphabet type!')
+
+    def letterAt(letter, x, y, yscale=1, ax=None):
+        text = LETTERS[letter]
+
+        t = mpl.transforms.Affine2D().scale(1 * globscale, yscale * globscale) + \
+            mpl.transforms.Affine2D().translate(x, y) + ax.transData
+        p = PathPatch(text, lw=0, fc=COLOR_SCHEME[letter], transform=t)
+        if ax != None:
+            ax.add_artist(p)
+        return p
+
+    # iterate through the anchor points
+    for anchor in anchor_points:
+        # initialize list that will store tuples of (sequence, scale)
+        #   -> these are all sequences involved in the motiv with their corresponding scale variable
+        seqs = []
+
+        # get ref positions involved in the motiv
+        weight1, pos1 = math.modf(anchor)
+        pos1 = int(pos1)
+        pos2 = pos1 + 1
+        weight2 = 1 - weight1
+
+        # iterate over all kmers starting at pos1
+        for idx_kmer in torch.nonzero(kmer_ref[:, pos1], as_tuple=False):
+            # get the sequence corresponding to the index
+            kmer_seq = list(kmer_dict.keys())[list(kmer_dict.values()).index(idx_kmer)]
+
+            # get the weight of this specific kmer
+            kmer_weight = int(kmer_ref[idx_kmer, pos1] * weight1 * 100)
+
+            # store sequence and weight as tuple
+            seqs.append((kmer_seq, kmer_weight))
+
+        # iterate over all kmers starting at pos2
+        for idx_kmer in torch.nonzero(kmer_ref[:, pos2], as_tuple=False):
+            # get the sequence corresponding to the index
+            kmer_seq = list(kmer_dict.keys())[list(kmer_dict.values()).index(idx_kmer)]
+
+            # get the weight of this specific kmer
+            kmer_weight = int(kmer_ref[idx_kmer, pos2] * weight2 * 100)
+
+            # store sequence and weight as tuple
+            seqs.append((kmer_seq, kmer_weight))
+
+        fig, ax = plt.subplots(figsize=(10, 3))
+
+        all_scores = #TODO scores matrix needed; format: list (position) of list (letters at position) of type (letter, score)
+        x = 1
+        maxi = 0
+        for scores in all_scores:
+            y = 0
+            for base, score in scores:
+                letterAt(base, x, y, score, ax)
+                y += score
+            x += 1
+            maxi = max(maxi, y)
+
+        plt.xticks(range(1, x))
+        plt.xlim((0, x))
+        plt.ylim((0, maxi))
+        plt.tight_layout()
+        plt.show()
 
 
 def category_from_output(output):
