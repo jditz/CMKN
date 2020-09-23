@@ -513,6 +513,7 @@ def count_classes(filepath, verbose=False):
                 class_count[2] += 1
 
     if verbose:
+        print("number of samples in dataset: {}".format(nb_samples))
         print("class balance: H = {}, M = {}, L = {}".format(class_count[0] / nb_samples, class_count[1] / nb_samples,
                                                              class_count[2] / nb_samples))
 
@@ -548,7 +549,7 @@ def test_motiv():
     anchor = anchor.detach().numpy()
 
     # create motivs from the anchors
-    anchors_to_motivs(anchor, ref_pos, kmer_dict)
+    anchors_to_motivs(anchor, ref_pos, kmer_dict, args.kmer_size, outdir=args.outdir)
 
 
 def main(filepath):
@@ -557,6 +558,6 @@ def main(filepath):
 
 if __name__ == '__main__':
     #main('./data/test_dataset.fasta')
-    #count_classes('./data/processed_PI_DataSet_sample_labels_clean.fasta', True)
-    test_motiv()
+    count_classes('./data/processed_PI_DataSet_sample_labels_clean.fasta', True)
+    #test_motiv()
     #test_exp()
