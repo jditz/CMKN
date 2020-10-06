@@ -40,7 +40,7 @@ ALPHABETS = {
 class CONDataset(data.Dataset):
     """ Custom PyTorch Dataset object to handle input for experiments with CON models
     """
-    def __init__(self, filepath, ext="fasta", kmer_size=3, alphabet="DNA_AMBI"):
+    def __init__(self, filepath, ext="fasta", kmer_size=3, alphabet="DNA_AMBI", clean_set=None):
         """ Custom Dataset Constructor
 
         - **Parameters**::
@@ -50,6 +50,10 @@ class CONDataset(data.Dataset):
             :param ext: Extension of the file containing the data
                 :type ext: String
             :param kmer_size: Size of the kmers considered in the current experiment
+            :param clean_set: Specify if the dataset should be cleaned. Only works for fasta-ish files.
+                :type clean_set: Tuple where the first entry is an Integer (specifies which column of the label holds
+                                 the information needed for cleaning), and the second entry is a string (specifies the
+                                 value that indicates an invalid entry)
         """
 
         # call constructor of parent class
@@ -69,6 +73,11 @@ class CONDataset(data.Dataset):
             self.seq_len = len(self.data[0].seq)
         else:
             raise ValueError('Sequences are of different length!')
+
+        # clean dataset of invalid samples iff the file is fasta-ish and a cleaning criterion, i.e. the column of the
+        # id string that holds the class label information, is provided
+        if clean_set is not None and ext == "fasta":
+            self.data = [i for i in self.data if i.id.split('|')[clean_set[0]] != clean_set[1]]
 
         # create dictionary that maps each string of length kmer_size that can be build using alphabet to an integer
         self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[alphabet][0])

@@ -871,7 +871,7 @@ class CON2(nn.Module):
 
             # activate with log softmax function for multi-class classification
             else:
-                return F.log_softmax(output, dim=1)
+                return F.softmax(output, dim=1)
         else:
             return output
 
@@ -957,7 +957,7 @@ class CON2(nn.Module):
                     batch_out = batch_out.view(batch_size, -1)
                     batch_out = self.fc(batch_out)
                 else:
-                    batch_out = self(data, proba).data.cpu()
+                    batch_out = self(data, phi, proba).data.cpu()
 
             # combine the result of the forward propagation
             #batch_out = torch.cat((batch_out[:batch_size], batch_out[batch_size:]), dim=-1)

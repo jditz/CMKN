@@ -20,6 +20,7 @@ from con import (CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref,
                  plot_grad_flow, Hook, anchors_to_motivs)
 
 from Bio import SeqIO
+from sklearn.metrics import roc_auc_score
 
 
 # MACROS
@@ -37,10 +38,42 @@ DATA_DIR = './data/'
 
 # extend custom data handler for the used dataset
 class CustomHandler(CONDataset):
-    def __init__(self, filepath, kmer_size=3):
-        super(CustomHandler, self).__init__(filepath, kmer_size=kmer_size, alphabet='PROTEIN_AMBI')
+    def __init__(self, filepath, kmer_size=3, drug='SQV', nb_classes=3, clean_set=True):
+        if drug == 'SQV':
+            self.drug_nb = 7
+        elif drug == 'LPV':
+            self.drug_nb = 8
+        elif drug == 'DRV':
+            self.drug_nb = 9
+        elif drug == 'ATV':
+            self.drug_nb = 10
+        elif drug == 'NFV':
+            self.drug_nb = 11
+        elif drug == 'IDV':
+            self.drug_nb = 12
+        elif drug == 'FPV':
+            self.drug_nb = 13
+        elif drug == 'TPV':
+            self.drug_nb = 14
+        else:
+            raise ValueError('The dataset does not contain any information about drug resilience of HIV' +
+                             '\nagainst the specified drug!\n')
 
-        self.all_categories = ['H', 'M', 'L']
+        if clean_set:
+            aux_tup = (self.drug_nb, 'NA')
+        else:
+            aux_tup = None
+
+        super(CustomHandler, self).__init__(filepath, kmer_size=kmer_size, alphabet='PROTEIN_AMBI',
+                                            clean_set=aux_tup)
+
+        self.nb_classes = nb_classes
+        if nb_classes == 2:
+            self.class_to_idx = {'H': 0, 'M': 0, 'L': 1}
+            self.all_categories = ['res', 'no_res']
+        else:
+            self.class_to_idx = {'H': 0, 'M': 1, 'L': 2}
+            self.all_categories = ['H', 'M', 'L']
 
     def __getitem__(self, idx):
         # get a sample using the parent __getitem__ function
@@ -48,19 +81,19 @@ class CustomHandler(CONDataset):
 
         # initialize label tensor
         if len(sample[1]) == 1:
-            labels = torch.zeros(3)
+            labels = torch.zeros(self.nb_classes)
         else:
-            labels = torch.zeros(len(sample[1]), 3)
+            labels = torch.zeros(len(sample[1]), self.nb_classes)
 
         # iterate through all id strings and update the label tensor, accordingly
         for i, id_str in enumerate(sample[1]):
             try:
-                aux_lab = id_str.split('|')[7]
+                aux_lab = id_str.split('|')[self.drug_nb]
                 if aux_lab != 'NA':
                     if len(sample[1]) == 1:
-                        labels[self.all_categories.index(aux_lab)] = 1.0
+                        labels[self.class_to_idx[aux_lab]] = 1.0
                     else:
-                        labels[i, self.all_categories.index(aux_lab)] = 1.0
+                        labels[i, self.class_to_idx[aux_lab]] = 1.0
 
             except:
                 continue
@@ -112,6 +145,8 @@ def load_args():
                         help="path to the file containing the dataset.")
     parser.add_argument("--extension", dest="extension", default="fasta", type=str,
                         help="extension of the file containing the dataset (default fasta)")
+    parser.add_argument("--drug", dest="drug", default="SQV", type=str,
+                        help="specifies the drug that will be used to classify virus resilience (default SQV)")
 
     # parse the arguments
     args = parser.parse_args()
@@ -145,6 +180,12 @@ def load_args():
             except:
                 pass
         outdir = outdir + "/{}".format(NAME)
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        outdir = outdir + "/classes_{}".format(args.num_classes)
         if not os.path.exists(outdir):
             try:
                 os.makedirs(outdir)
@@ -208,7 +249,8 @@ def test_exp():
                  kernel_args=[args.sigma, args.scale])
 
     # load data
-    data_all = CustomHandler(args.filepath, kmer_size=args.kmer_size)
+    data_all = CustomHandler(args.filepath, kmer_size=args.kmer_size, drug=args.drug, nb_classes=args.num_classes,
+                             clean_set=True)
 
     # Creating data indices for training and validation splits:
     validation_split = .2
@@ -220,11 +262,11 @@ def test_exp():
     if shuffle_dataset:
         np.random.seed(random_seed)
         np.random.shuffle(indices)
-    train_indices, val_indices = indices[split:], indices[:split]
+    args.train_indices, args.val_indices = indices[split:], indices[:split]
 
     # Creating PyTorch data samplers and loaders:
-    data_train = Subset(data_all, train_indices)
-    data_val = Subset(data_all, val_indices)
+    data_train = Subset(data_all, args.train_indices)
+    data_val = Subset(data_all, args.val_indices)
 
     loader_train = DataLoader(data_train, batch_size=args.batch_size)
     loader_val = DataLoader(data_val, batch_size=args.batch_size)
@@ -274,7 +316,7 @@ def test_exp():
         if DEBUG_STEPS[2]:
             print("\n\n********* DEBUGGING STEP 3 *********\n    -> train model on a single datapoint\n" +
                   "    -> model has to be able to overfit with zero loss and validation accuracy at chance level\n")
-            data_debug = Subset(data_all, [val_indices[0]])
+            data_debug = Subset(data_all, [args.val_indices[0]])
             loader_debug = DataLoader(data_debug, batch_size=1)
 
             print("length of debug dataset: {}".format(len(loader_debug.dataset)))
@@ -497,20 +539,22 @@ def test_exp():
         print("Cannot import matplotlib.pyplot")
 
 
-def count_classes(filepath, verbose=False):
+def count_classes(filepath, verbose=False, drug=7):
     class_count = [0, 0, 0]
     nb_samples = 0
 
     with open(filepath, 'rU') as handle:
         for record in SeqIO.parse(handle, 'fasta'):
-            nb_samples += 1
-            aux_lab = record.id.split('|')[7]
+            aux_lab = record.id.split('|')[drug]
             if aux_lab == 'H':
                 class_count[0] += 1
             elif aux_lab == 'M':
                 class_count[1] += 1
             elif aux_lab == 'L':
                 class_count[2] += 1
+            else:
+                continue
+            nb_samples += 1
 
     if verbose:
         print("number of samples in dataset: {}".format(nb_samples))
@@ -533,8 +577,27 @@ def count_classes(filepath, verbose=False):
     return class_count, expected_loss
 
 
-def test_motiv():
-    params = torch.load('output/CON_experiment/kmer_3/params_4.0_10/anchors_40/layers_3/CON_k3_epochs10.pkl')
+def test_dataset_handler(filepath, drug, nb_classes):
+    # load dataset
+    dataset = CustomHandler(filepath, drug=drug, nb_classes=nb_classes)
+
+    # print dataset statistics
+    count_classes(filepath, True, dataset.drug_nb)
+
+    # check if the number of samples in the dataset is correct
+    print('\nNumber of samples in dataset handler: {}'.format(len(dataset)))
+
+    # interate over dataset and look at labels
+    loader = DataLoader(dataset, 50)
+    for phi, label, *_ in loader:
+        print(label)
+        break
+
+
+def test_motiv(kmer_len, anchor, sigma):
+    path = '/home/jonas/Documents/Research/OligoKernelNetwork/cluster_results/' +\
+           'kmer_{}/params_{}.0_10/anchors_{}/layers_3/'.format(kmer_len, sigma, anchor)
+    params = torch.load(path + 'CON_results__epochs500.pkl')
     args = params['args']
     state_dict = params['state_dict']
 
@@ -542,14 +605,87 @@ def test_motiv():
     kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
 
     # build tensor holding reference positions
-    ref_pos = build_kmer_ref(args.filepath, args.extension, kmer_dict, args.kmer_size)
+    ref_pos = build_kmer_ref('data/processed_PI_DataSet_sample_labels_clean.fasta', args.extension, kmer_dict,
+                             args.kmer_size)
 
     # convert anchor points into sequence positions
     anchor = (torch.acos(state_dict['oligo.weight'][:, 0]) / np.pi) * (ref_pos.size(1) - 1)
     anchor = anchor.detach().numpy()
 
     # create motivs from the anchors
-    anchors_to_motivs(anchor, ref_pos, kmer_dict, args.kmer_size, outdir=args.outdir)
+    anchors_to_motivs(anchor, ref_pos, kmer_dict, args.kmer_size, outdir=path+'motivs/')
+
+
+def eval_results():
+    # define macros
+    KMER_SIZES = [1, 2]
+    ANCHORS = [40, 65, 90]
+    SIGMAS = [2, 4, 8, 16]
+    DATAFILE = '/home/jonas/Development/CON/con/data/processed_PI_DataSet_sample_labels_clean.fasta'
+    RESULTSDIR = '/home/jonas/Documents/Research/OligoKernelNetwork/cluster_results/'
+
+    # iterate over all results and evaluate each of them
+    for kmer_size in KMER_SIZES:
+        for anchor in ANCHORS:
+            for sigma in SIGMAS:
+                print('Evaluating following parameter combination:\n    kmer_size={}, num_anchors={}, sigma={}'.format(
+                    kmer_size, sigma, anchor))
+
+                # load the results
+                print('loading dataset... please hold...')
+                results_dict = torch.load(RESULTSDIR +
+                    'kmer_{}/params_{}.0_10/anchors_{}/layers_3/CON_results__epochs500.pkl'.format(kmer_size, sigma,
+                                                                                                   anchor))
+                args = results_dict['args']
+
+                # access dataset
+                data_all = CustomHandler(DATAFILE, kmer_size)
+                loader = DataLoader(data_all, batch_size=args.batch_size)
+
+                # initialize the model
+                kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
+                ref_pos = build_kmer_ref(DATAFILE, args.extension, kmer_dict, args.kmer_size)
+                model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
+                             strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
+                             kernel_args=[args.sigma, args.scale])
+
+                # load the trained model state dictionary
+                model.load_state_dict(results_dict['state_dict'])
+
+                # store true label and predictions for each sample in the dataset
+                print('calculating predictions of trained model... please hold...')
+                pred_y, true_y = model.predict(loader, proba=True)
+
+                # convert to numpy arrays
+                pred_y = pred_y.detach().numpy()
+                true_y = true_y.detach().numpy()
+                true_y = np.nonzero(true_y)[1]
+
+                print('\n==================================================\n' +
+                      'Statistics of params combination [{}, {}, {}]\n'.format(kmer_size, sigma, anchor) +
+                      '==================================================')
+
+                # calculate the AU1P score
+                aunp_score = roc_auc_score(true_y, pred_y, average="weighted", multi_class="ovr")
+                print('\n    - AUNP score: {}'.format(aunp_score))
+
+                # convert predicted probability into label
+                pred_y_label = np.argmax(pred_y, axis=1)
+
+                # calculate classification accuracy of each class separately
+                print('\n    - Classification Accuracy:')
+                class_names = ["H", "M", "L"]
+                for i in range(args.num_classes):
+                    # get indices of all samples belonging to the current class
+                    class_indices = [j for j, e in enumerate(true_y) if e == i]
+
+                    # calculate accuracy for current class
+                    class_acc = sum(pred_y_label[class_indices] == i) / len(class_indices)
+
+                    # print result
+                    if i == 1:
+                        print(pred_y_label[class_indices])
+                    print('        * Classification accuracy of class {}: {}'.format(class_names[i], class_acc))
 
 
 def main(filepath):
@@ -558,6 +694,8 @@ def main(filepath):
 
 if __name__ == '__main__':
     #main('./data/test_dataset.fasta')
-    count_classes('./data/processed_PI_DataSet_sample_labels_clean.fasta', True)
-    #test_motiv()
+    count_classes('./data/processed_PI_DataSet_sample_labels.fasta', True, 14)
+    #test_motiv(1, 65, 4)
     #test_exp()
+    #test_dataset_handler('./data/processed_PI_DataSet_sample_labels.fasta', 'SQV', 2)
+    #eval_results()
