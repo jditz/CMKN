@@ -465,6 +465,11 @@ class ClassBalanceLoss(nn.Module):
         # call constructor of parent class
         super(ClassBalanceLoss, self).__init__()
 
+        # check whether the parameters are valid
+        if len(samples_per_cls) != no_of_classes:
+            raise ValueError('Dimensionality of first argument expected to be {}. Found {} instead!'.format(
+                no_of_classes, len(samples_per_cls)))
+
         # store user-specified parameters
         self.samples_per_cls = samples_per_cls
         self.no_of_classes = no_of_classes
@@ -540,7 +545,7 @@ class ClassBalanceLoss(nn.Module):
         if self.loss_type == "focal":
             cb_loss = self.focal_loss(labels_one_hot, logits, weights_tensor)
         elif self.loss_type == "sigmoid":
-            cb_loss = F.binary_cross_entropy_with_logits(input=logits, target=labels_one_hot, weights=weights_tensor)
+            cb_loss = F.binary_cross_entropy_with_logits(input=logits, target=labels_one_hot, weight=weights_tensor)
         elif self.loss_type == "softmax":
             pred = logits.softmax(dim=1)
             cb_loss = F.binary_cross_entropy(input=pred, target=labels_one_hot, weight=weights_tensor)

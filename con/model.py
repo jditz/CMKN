@@ -15,7 +15,7 @@ from timeit import default_timer as timer
 import copy
 
 from .layers import POOLINGS, CONLayer, CKNLayer, LinearMax
-from .utils import category_from_output
+from .utils import category_from_output, ClassBalanceLoss
 
 
 class CONSequential(nn.Module):
@@ -1128,15 +1128,12 @@ class CON2(nn.Module):
                             output = self(data, phi)
 
                             # create prediction tensor
-                            if self.num_classes > 2:
-                                pred = torch.zeros(output.shape)
-                                for i in range(output.shape[0]):
-                                    pred[i, category_from_output(output[i, :])] = 1
-                            else:
-                                pred = (output.data > 0).float()
+                            pred = torch.zeros(output.shape)
+                            for i in range(output.shape[0]):
+                                pred[i, category_from_output(output[i, :])] = 1
 
                             # multiclass prediction needs special call of loss function
-                            if self.num_classes > 2:
+                            if self.num_classes > 2 or isinstance(criterion, ClassBalanceLoss):
                                 loss = criterion(output, target.argmax(1))
                             else:
                                 loss = criterion(output, target)
@@ -1144,15 +1141,12 @@ class CON2(nn.Module):
                         output = self(data, phi)
 
                         # create prediction tensor
-                        if self.num_classes > 2:
-                            pred = torch.zeros(output.shape)
-                            for i in range(output.shape[0]):
-                                pred[i, category_from_output(output[i, :])] = 1
-                        else:
-                            pred = (output.data > 0).float()
+                        pred = torch.zeros(output.shape)
+                        for i in range(output.shape[0]):
+                            pred[i, category_from_output(output[i, :])] = 1
 
                         # multiclass prediction needs special call of loss function
-                        if self.num_classes > 2:
+                        if self.num_classes > 2 or isinstance(criterion, ClassBalanceLoss):
                             loss = criterion(output, target.argmax(1))
                         else:
                             loss = criterion(output, target)
@@ -1165,11 +1159,8 @@ class CON2(nn.Module):
 
                     # update statistics
                     running_loss += loss.item() * size
-                    if self.num_classes > 2:
-                        running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
-                                                      torch.ones(pred.shape[0]) * self.num_classes).item()
-                    else:
-                        running_corrects += torch.sum(pred == target.data).item()
+                    running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
+                                                  torch.ones(pred.shape[0]) * self.num_classes).item()
 
                 # calculate loss and accuracy in the current epoch
                 epoch_loss = running_loss / len(data_loader[phase].dataset)

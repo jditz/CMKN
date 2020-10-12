@@ -1,1 +1,0 @@
->SeqID|PtID|Subtype|Method|RefID|Type|IsolateName|SeqType|FPV|ATV|IDV|LPV|NFV|SQV|TPV|DRV
