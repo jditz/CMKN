@@ -869,7 +869,7 @@ class CON2(nn.Module):
             if self.num_classes == 2:
                 return output.sigmoid()
 
-            # activate with log softmax function for multi-class classification
+            # activate with softmax function for multi-class classification
             else:
                 return F.softmax(output, dim=1)
         else:

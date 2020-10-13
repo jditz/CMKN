@@ -705,8 +705,11 @@ def bootstrap_auc(y_true, y_pred, ntrial=10):
 
 
 def recall_at_fdr(y_true, y_score, fdr_cutoff=0.05):
-    # print y_true, y_score
-    precision, recall, thresholds = precision_recall_curve(y_true, y_score)
+    # convert y_true and y_score into desired format
+    #   -> both have to be lists of shape [nb_samples]
+    y_true_new = y_true.argmax(axis=1)
+    y_score_new = [y_score[j][i] for j, i in enumerate(y_true_new)]
+    precision, recall, thresholds = precision_recall_curve(y_true_new, y_score_new)
     fdr = 1 - precision
     cutoff_index = next(i for i, x in enumerate(fdr) if x <= fdr_cutoff)
     return recall[cutoff_index]
@@ -766,16 +769,16 @@ def compute_metrics(y_true, y_pred):
     metric['log.loss'] = log_loss(y_true, y_pred)
     metric['accuracy'] = accuracy_score(y_true, y_pred > 0.5)
     metric['auROC'] = roc_auc_score(y_true, y_pred)
-    metric['auROC50'] = get_roc(y_true, y_pred, 50)
+    #metric['auROC50'] = get_roc(y_true, y_pred, 50)
     metric['auPRC'] = average_precision_score(y_true, y_pred)
     metric['recall_at_10_fdr'] = recall_at_fdr(y_true, y_pred, 0.10)
     metric['recall_at_5_fdr'] = recall_at_fdr(y_true, y_pred, 0.05)
     metric["pearson.r"], metric["pearson.p"] = stats.pearsonr(y_true, y_pred)
-    metric["spearman.r"], metric["spearman.p"] = stats.spearmanr(y_true, y_pred)
+    #metric["spearman.r"], metric["spearman.p"] = stats.spearmanr(y_true, y_pred)
     df = pd.DataFrame.from_dict(metric, orient='index')
     df.columns = ['value']
     df.sort_index(inplace=True)
-    return
+    return df
 
 
 #############################################################################
