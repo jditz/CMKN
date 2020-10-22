@@ -86,6 +86,33 @@ class CustomHandler(CONDataset):
         return sample
 
 
+class EncodeHandler(CONDataset):
+    def __init__(self, datadir, ext='seq.gz', kmer_size=8, tfid=None, nb_classes=2):
+        super(EncodeHandler, self).__init__(datadir, ext=ext, kmer_size=kmer_size, tfid=tfid)
+
+        self.nb_classes = nb_classes
+
+    def __getitem__(self, idx):
+        sample = super(EncodeHandler, self).__getitem__(idx)
+
+        # initialize label tensor
+        if len(sample[1]) == 1:
+            labels = torch.zeros(self.nb_classes)
+        else:
+            labels = torch.zeros(len(sample[1]), self.nb_classes)
+
+        # iterate over each samples and update the labels tensor, accordingly
+        for i, y in enumerate(sample[1]):
+            if len(sample[1]) == 1:
+                labels[y] = 1.0
+            else:
+                labels[i, y] = 1.0
+
+        # return the sample with updated label tensor
+        sample = (sample[0], labels)
+        return sample
+
+
 def load_args():
     """
     Function to create an argument parser
@@ -267,7 +294,7 @@ def count_classes(filepath, verbose=False, drug=7, num_classes=3):
     return class_count, expected_loss
 
 
-def main():
+def train_hiv():
     # set parameters for the test run
     args = load_args()
     args.alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
@@ -393,5 +420,20 @@ def main():
         print("Cannot import matplotlib.pyplot")
 
 
+def train_encode():
+    # load parameters
+    args = load_args()
+    args.alphabet = 'ACGTN'
+
+
+def main(exp):
+    if exp == 'HIV':
+        train_hiv()
+    elif exp == 'ENCODE':
+        train_encode()
+    else:
+        raise ValueError('Unknown experiment! Received the following argument: {}'.format(exp))
+
+
 if __name__ == '__main__':
-    main()
+    main('ENCODE')

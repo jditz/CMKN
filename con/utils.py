@@ -162,7 +162,7 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
             :type anchor_points: List of floats
         :param kmer_ref: Tensor storing the frequency with which every k-mer starts at each position in the dataset
             :type kmer_ref: Tensor
-        :param kmer_dict: Dictionary mapping each k-mer to a index
+        :param kmer_dict: Dictionary mapping each k-mer to an index
             :type kmer_dict: Dictionary
     """
     # import needed libraries
@@ -313,6 +313,73 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
         plt.tight_layout()
         plt.savefig(outdir + "/motif_anchor_" + str(anchor) + ".png")
         plt.close(fig)
+
+
+def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, viz=True):
+    """Construction of the anchor weight matrix
+
+    This function converts the learned anchors into a 2d matrix where each row represents one k-mer and each column
+    represents a sequence position. This matrix can be visualized to get an image comparable to Figure 2 in
+    Meinicke et al., 2004.
+
+    - **Parameters**::
+
+        :param anchors: List of learned anchor positions
+            :type anchors: List of Floats
+        :param kmer_ref: Reference sequence of the trained model
+            :type kmer_ref: Tensor (num_k-mers x len_seq)
+        :param kmer_dict: Dictionary mapping each k-mer to an index
+            :type kmer_dict: Dictionary
+        :param sigma: sigma value used for the trained model
+            type sigma: Float
+        :param viz: Indicates whether the matrix should be visualized using matplotlib
+            :type viz: Boolean
+
+    - **Returns**::
+
+        :returns: Matrix
+            :rtype: 2d NumPy array
+    """
+    # import section
+    from scipy.ndimage import gaussian_filter1d
+
+    # initialize output matrix
+    image_matrix = np.zeros(kmer_ref.shape)
+
+    # iterate over all anchors as update image_matrix
+    for anchor in anchors:
+
+        # get positions that are affected by the current anchor
+        weight1, pos1 = math.modf(anchor)
+        pos1 = int(pos1)
+        pos2 = pos1 + 1
+        weight2 = 1 - weight1
+
+        # update image_matrix
+        image_matrix[:, pos1] = image_matrix[:, pos1] + (kmer_ref[:, pos1].detach().numpy() * weight1)
+        image_matrix[:, pos2] = image_matrix[:, pos2] + (kmer_ref[:, pos2].detach().numpy() * weight2)
+
+    # apply a Gaussian filter to incorporate the oligo kernel information
+    image_matrix = gaussian_filter1d(image_matrix, sigma=sigma, mode='constant')
+
+    # reduce noise in the matrix
+    below_threshold = image_matrix < 0.1
+    image_matrix[below_threshold] = 0
+
+    if viz:
+
+        # import matplotlib to plot the matrix
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure()
+        plt.imshow(image_matrix, cmap='Purples', interpolation=None, aspect='auto')
+        plt.colorbar()
+        plt.xlabel('Position')
+        plt.yticks(np.arange(len(list(kmer_dict.keys()))), list(kmer_dict.keys()))
+        plt.title('k-mer weight functions')
+        plt.show()
+
+    return image_matrix
 
 
 def category_from_output(output):

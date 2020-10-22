@@ -219,15 +219,14 @@ class CONDataset(data.Dataset):
             if alphabet.__contains__('_'):
                 alphabet = alphabet.split('_')[0]
             self.data_loader = EncodeLoader(filepath, alphabet=alphabet)
+            self.tfids = self.data_loader.get_ids()
 
             # if no transcription factor is selected, use the first one in the datasets
             if tfid is None:
-                tfids = self.data_loader.get_ids()
-                tfid = tfids[0]
+                tfid = self.tfids[0]
 
             # load sequences and labels
             self.data, self.labels = self.data_loader.get_dataset(tfid, val_split=0)
-            print(len(self.labels), sum(self.labels == 1), sum(self.labels == 0), self.labels)
 
             # raise an error if data and labels does not have the same length
             if len(self.data) != len(self.labels):
@@ -309,6 +308,37 @@ class CONDataset(data.Dataset):
             sample = None
         return sample
 
+    def update_dataset(self, tfid=None, split='train'):
+        """This function updates the DataSet object to use the sequences for the specified tf id
+        """
+        # check if the DataSet object is set up for ENCODE datasets
+        if self.ext != 'seq.gz':
+            raise ValueError('DataSet object is not set up for ENCODE datasets')
+
+        # if no transcription factor is selected, use the first one in the datasets
+        if tfid is None:
+            tfid = self.tfids[0]
+
+        # check if several tfids were given. If yes, combine corresponding data
+        if isinstance(tfid, str):
+            # load sequences and labels
+            self.data, self.labels = self.data_loader.get_dataset(tfid, val_split=0, split=split)
+        elif hasattr(tfid, "__iter__"):
+            self.data = self.labels = []
+            # iterate over all provided ids and combine sequences and labels
+            for s in tfid:
+                aux_data, aux_labels = self.data_loader.get_dataset(s, val_split=0, split=split)
+                self.data = [*self.data, *aux_data]
+                self.labels = [*self.labels, *aux_labels]
+        else:
+            raise ValueError('Expected String or [String] for tfid; received {}'.format(tfid))
+
+        # raise an error if data and labels does not have the same length
+        if len(self.data) != len(self.labels):
+            raise ValueError('data and labels have to be of the same length\n' +
+                             '    Found instead: len(data)={}, len(labels)={}'.format(len(self.data),
+                                                                                      len(self.labels)))
+
 
 class EncodeLoader(object):
     """ Custom loader handling the ENCODE dataset used in 'B. Alipanahi, A. Delong, M. T. Weirauch, and B. J. Frey.
@@ -381,3 +411,22 @@ class EncodeLoader(object):
             return X, y, X_val, y_val
 
         return X, y
+
+    def get_sequences(self, tfids):
+        # create a list of all files that store sequences
+        all_files = []
+        for tfid in tfids:
+            all_files.append('%s/%s_AC%s' % (self.datadir, tfid, self.ext))
+            all_files.append('%s/%s_B%s' % (self.datadir, tfid, self.ext))
+
+        # convert all csv files into pandas data frames
+        li = []
+        for file in all_files:
+            df = pd.read_csv(file, compression='gzip', delimiter='\t')
+            li.append(df)
+
+        # concatenate all data frames into one frame
+        frame = pd.concat(li, axis=0, ignore_index=True)
+
+        # return the sequences as a list
+        return self.pad_seq(frame['seq'].values)
