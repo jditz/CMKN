@@ -362,6 +362,9 @@ def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, viz=True):
     # apply a Gaussian filter to incorporate the oligo kernel information
     image_matrix = gaussian_filter1d(image_matrix, sigma=sigma, mode='constant')
 
+    # scale matrix between 0 and 1
+    image_matrix /= image_matrix.max()
+
     # reduce noise in the matrix
     below_threshold = image_matrix < 0.1
     image_matrix[below_threshold] = 0
@@ -375,6 +378,7 @@ def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, viz=True):
         plt.imshow(image_matrix, cmap='Purples', interpolation=None, aspect='auto')
         plt.colorbar()
         plt.xlabel('Position')
+        plt.xticks(np.arange(0, kmer_ref.size(1), 5))
         plt.yticks(np.arange(len(list(kmer_dict.keys()))), list(kmer_dict.keys()))
         plt.title('k-mer weight functions')
         plt.show()
