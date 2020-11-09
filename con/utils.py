@@ -7,21 +7,19 @@
 
 import math
 import numpy as np
-from itertools import combinations, product, chain
+from itertools import combinations, product
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.autograd import Variable
-from Bio import SeqIO, motifs
-from Bio.Seq import Seq
-from Bio.Data import IUPACData
+from Bio import SeqIO
 
 import pandas as pd
 from scipy import stats
-from sklearn.metrics import (
-    roc_auc_score, log_loss, accuracy_score,
-    precision_recall_curve, average_precision_score
-)
+from sklearn.metrics import (roc_auc_score, log_loss, accuracy_score, precision_recall_curve, average_precision_score,
+                             f1_score)
+
+from timeit import default_timer as timer
 
 
 # definition of macros
@@ -103,7 +101,7 @@ def kmer2dict(kmer_size, alphabet):
     return kmer_dict
 
 
-def build_kmer_ref(filepath, extension, kmer_dict, kmer_size):
+def build_kmer_ref_from_file(filepath, extension, kmer_dict, kmer_size):
     """Utility to create reference k-mere positions
 
     This function uses a specified training set of sequences and creates a tensor that stores for each position the
@@ -143,6 +141,56 @@ def build_kmer_ref(filepath, extension, kmer_dict, kmer_size):
             for i, pos in enumerate(positions):
                 for p in pos:
                     ref_pos[i, p] += 1
+
+    # divide every entry in the ref position tensor by the size of the dataset
+    return ref_pos / data_size
+
+
+def build_kmer_ref_from_list(seq_list, kmer_dict, kmer_size):
+    """Utility to create reference k-mere positions
+
+    This function uses a specified training set of sequences and creates a tensor that stores for each position the
+    frequency of k-mers (k = kmer_size) starting at that position.
+
+    - **Parameters**::
+
+        :param seq_list: List containing all sequences of the dataset
+            :type seq_list: List of String
+        :param kmer_dict: Dictionary mapping each k-mer to an integer.
+            :type kmer_dict: dictionary
+        :param kmer_size: Size of the k-mers (k = kmer_size).
+            :type kmer_size: Integer
+    """
+
+    # check whether all sequences have the same length
+    if not all(len(x) == len(seq_list[0]) for x in seq_list):
+        raise ValueError('Sequences are of different length!')
+
+    # initialize the tensor holding the kmer reference positions
+    ref_pos = torch.zeros(len(kmer_dict), len(seq_list[0]), requires_grad=False)
+
+    # keep track of the number of sequences in the dataset
+    data_size = 0
+
+    c = 0
+    tic = timer()
+    for seq in seq_list:
+        # update number of sequences in the dataset
+        data_size += 1
+
+        # get kmer positions in the current sequence
+        positions = find_kmer_positions(seq, kmer_dict, kmer_size)
+
+        # update reference tensor
+        for i, pos in enumerate(positions):
+            for p in pos:
+                ref_pos[i, p] += 1
+
+        if (c % 10000) == 0:
+            toc = timer()
+            print("Finished {} samples, elapsed time: {:.2f}min\n".format(c, (toc - tic) / 60))
+
+        c += 1
 
     # divide every entry in the ref position tensor by the size of the dataset
     return ref_pos / data_size
@@ -839,6 +887,7 @@ def compute_metrics(y_true, y_pred):
     metric = {}
     metric['log.loss'] = log_loss(y_true, y_pred)
     metric['accuracy'] = accuracy_score(y_true, y_pred > 0.5)
+    metric['F_score'] = f1_score(y_true.argmax(axis=1), y_pred.argmax(axis=1))
     metric['auROC'] = roc_auc_score(y_true, y_pred)
     metric['auROC50'] = roc_auc_score(y_true, y_pred, max_fpr=0.5)
     metric['auPRC'] = average_precision_score(y_true, y_pred)

@@ -795,6 +795,7 @@ class CON2(nn.Module):
                               kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
 
         # initialize the additional "normal" convolutional layers
+        self.nb_conv_layers = len(out_channels_list) - 1
         convlayers = []
         for i in range(1, len(out_channels_list)):
 
@@ -860,7 +861,8 @@ class CON2(nn.Module):
             :return: Evaluation of the input
         """
         output = self.oligo(input, phi)
-        output = self.conv(output)
+        if self.nb_conv_layers > 0:
+            output = self.conv(output)
         output = output.view(output.size(0), -1)
         output = self.fc(output)
         output = self.classifier(output)
@@ -953,7 +955,8 @@ class CON2(nn.Module):
             with torch.no_grad():
                 if only_representation:
                     batch_out = self.oligo(data, phi)
-                    batch_out = self.conv(batch_out)
+                    if self.nb_conv_layers > 0:
+                        batch_out = self.conv(batch_out)
                     batch_out = batch_out.view(batch_size, -1)
                     batch_out = self.fc(batch_out)
                 else:

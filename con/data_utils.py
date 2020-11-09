@@ -195,6 +195,7 @@ class CONDataset(data.Dataset):
 
         # store parameters
         self.filepath = filepath
+        self.alphabet = alphabet
         self.ext = ext
         self.kmer_size = kmer_size
 
@@ -245,7 +246,7 @@ class CONDataset(data.Dataset):
             raise ValueError('Unknown file extension: {}'.format(ext))
 
         # create dictionary that maps each string of length kmer_size that can be build using alphabet to an integer
-        self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[alphabet][0])
+        self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[self.alphabet][0])
 
     def __len__(self):
         return len(self.data)
