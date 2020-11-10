@@ -267,46 +267,71 @@ class CONDataset(data.Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        # if idx is an integer, convert to list
-        if isinstance(idx, int):
-            idx = [idx]
-
-        # initialize data tensor
-        if len(idx) == 1:
-            data_tensor = torch.zeros(len(self.kmer_dict), self.seq_len)
-        else:
+        # perform different sample extraction depending on whether a list of indices is given or not
+        try:
+            # initialize data tensor
             data_tensor = torch.zeros(len(idx), len(self.kmer_dict), self.seq_len)
 
-        # fill the data tensor
-        for i, sample in enumerate(idx):
+            # fill the data tensor
+            for i, sample in enumerate(idx):
+                # create list of k-mer positions in the current sequence for each k-mer over the alphabet
+                #     -> raise exception if one of the sequences is not created with the specified alphabet
+                try:
+                    if self.ext == 'fasta':
+                        positions = find_kmer_positions(self.data[sample].seq, self.kmer_dict, self.kmer_size)
+                    elif self.ext == 'seq.gz':
+                        positions = find_kmer_positions(self.data[sample], self.kmer_dict, self.kmer_size)
+                except ValueError:
+                    raise
+
+                # iterate over all kmers
+                for kmer, j in self.kmer_dict.items():
+
+                    # for each kmer, iterate over all occurrences and update data tensor, accordingly
+                    for pos in positions[j]:
+
+                        if len(idx) == 1:
+                            data_tensor[j, pos] = 1
+                        else:
+                            data_tensor[i, j, pos] = 1
+
+            # return data tensor and id string
+            if self.ext == 'fasta':
+                sample = (data_tensor, [self.data[i].id for i in idx])
+            elif self.ext == 'seq.gz':
+                sample = (data_tensor, [self.labels[i] for i in idx])
+            else:
+                sample = None
+
+        except TypeError:
+            # initialize data tensor
+            data_tensor = torch.zeros(len(self.kmer_dict), self.seq_len)
+
             # create list of k-mer positions in the current sequence for each k-mer over the alphabet
             #     -> raise exception if one of the sequences is not created with the specified alphabet
             try:
                 if self.ext == 'fasta':
-                    positions = find_kmer_positions(self.data[sample].seq, self.kmer_dict, self.kmer_size)
-                elif self.ext =='seq.gz':
-                    positions = find_kmer_positions(self.data[sample], self.kmer_dict, self.kmer_size)
+                    positions = find_kmer_positions(self.data[idx].seq, self.kmer_dict, self.kmer_size)
+                elif self.ext == 'seq.gz':
+                    positions = find_kmer_positions(self.data[idx], self.kmer_dict, self.kmer_size)
             except ValueError:
                 raise
 
             # iterate over all kmers
             for kmer, j in self.kmer_dict.items():
 
-                # for each kmer, iterate over all occurences and update data tensor, accordingly
+                # for each kmer, iterate over all occurrences and update data tensor, accordingly
                 for pos in positions[j]:
+                    data_tensor[j, pos] = 1
 
-                    if len(idx) == 1:
-                        data_tensor[j, pos] = 1
-                    else:
-                        data_tensor[i, j, pos] = 1
+            # return data tensor and id string
+            if self.ext == 'fasta':
+                sample = (data_tensor, [self.data[idx].id])
+            elif self.ext == 'seq.gz':
+                sample = (data_tensor, [self.labels[idx]])
+            else:
+                sample = None
 
-        # return data tensor and id string
-        if self.ext == 'fasta':
-            sample = (data_tensor, [self.data[i].id for i in idx])
-        elif self.ext == 'seq.gz':
-            sample = (data_tensor, [self.labels[i] for i in idx])
-        else:
-            sample = None
         return sample
 
     def update_dataset(self, tfid=None, split='train'):

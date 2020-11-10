@@ -3,13 +3,15 @@ import argparse
 
 from torch.utils.data import DataLoader
 import torch
+from torch import nn
 from torch.utils.data import Subset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
+from sklearn.model_selection import StratifiedShuffleSplit
 
 from con import (CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref_from_file, build_kmer_ref_from_list,
-                 Hook, compute_metrics)
+                 compute_metrics)
 
 from Bio import SeqIO
 
@@ -278,6 +280,7 @@ def load_args():
 
 def count_classes_hiv(filepath, verbose=False, drug=7, num_classes=3):
     class_count = [0] * num_classes
+    label_vec = []
     nb_samples = 0
 
     with open(filepath, 'rU') as handle:
@@ -286,19 +289,25 @@ def count_classes_hiv(filepath, verbose=False, drug=7, num_classes=3):
             if num_classes == 2:
                 if aux_lab == 'H':
                     class_count[0] += 1
+                    label_vec.append(0)
                 elif aux_lab == 'M':
                     class_count[0] += 1
+                    label_vec.append(0)
                 elif aux_lab == 'L':
                     class_count[1] += 1
+                    label_vec.append(1)
                 else:
                     continue
             else:
                 if aux_lab == 'H':
                     class_count[0] += 1
+                    label_vec.append(0)
                 elif aux_lab == 'M':
                     class_count[1] += 1
+                    label_vec.append(1)
                 elif aux_lab == 'L':
                     class_count[2] += 1
+                    label_vec.append(2)
                 else:
                     continue
             nb_samples += 1
@@ -331,7 +340,7 @@ def count_classes_hiv(filepath, verbose=False, drug=7, num_classes=3):
     if verbose:
         print("expected accuracy with random guessing: {}".format(rand_guess))
 
-    return class_count, expected_loss
+    return class_count, expected_loss, np.array(label_vec)
 
 
 def count_classes_encode(labels, verbose=True, num_classes=2):
@@ -393,20 +402,35 @@ def train_hiv():
     data_all = CustomHandler(args.filepath, kmer_size=args.kmer_size, drug=args.drug, nb_classes=args.num_classes,
                              clean_set=True)
 
+    # get labels of each entry for stratified shuffling and distribution of classes for class balance loss
+    args.class_count, args.expected_loss, label_vec = count_classes_hiv(args.filepath, True, data_all.drug_nb,
+                                                                        args.num_classes)
+
     # Creating data indices for training and validation splits:
-    validation_split = .2
-    test_split = .1
     shuffle_dataset = True
     random_seed = args.seed
     dataset_size = len(data_all)
-    indices = list(range(dataset_size))
-    split_val = int(np.floor(validation_split * dataset_size))
-    split_test = int(np.floor(test_split * dataset_size))
+    indices = np.arange(dataset_size)
     if shuffle_dataset:
-        np.random.seed(random_seed)
-        np.random.shuffle(indices)
-    args.train_indices, args.val_indices, args.test_indices = indices[split_val:], indices[split_test:split_val], \
-                                                              indices[:split_test]
+        # create StratifiedShuffleSplit object for the creation of stratified training, validation, and test sets
+        sss = StratifiedShuffleSplit(n_splits=2, train_size=0.9, random_state=random_seed)
+
+        # get indices of the test set
+        _, aux_split = sss.split(indices, label_vec)
+        args.test_indices = indices[aux_split[1]]
+
+        # get indices of training and validation set
+        aux_indices = indices[aux_split[0]]
+        _, aux_split = sss.split(aux_indices, label_vec[aux_split[0]])
+        args.train_indices = aux_indices[aux_split[0]]
+        args.val_indices = aux_indices[aux_split[1]]
+    else:
+        validation_split = .2
+        test_split = .1
+        split_val = int(np.floor(validation_split * dataset_size))
+        split_test = int(np.floor(test_split * dataset_size))
+        args.train_indices, args.val_indices, args.test_indices = indices[split_val:], indices[split_test:split_val], \
+                                                                  indices[:split_test]
 
     # Creating PyTorch data samplers and loaders:
     data_train = Subset(data_all, args.train_indices)
@@ -414,9 +438,6 @@ def train_hiv():
 
     loader_train = DataLoader(data_train, batch_size=args.batch_size)
     loader_val = DataLoader(data_val, batch_size=args.batch_size)
-
-    # get distribution of classes for class balance loss
-    args.class_count, args.expected_loss = count_classes_hiv(args.filepath, True, data_all.drug_nb, args.num_classes)
 
     # initialize optimizer and loss function
     if args.num_classes == 2:
@@ -563,10 +584,7 @@ def train_encode():
     args.class_count, args.expected_loss = count_classes_encode(data_all.labels, True, args.num_classes)
 
     # initialize optimizer and loss function
-    if args.num_classes == 2:
-        criterion = ClassBalanceLoss(args.class_count, args.num_classes, 'sigmoid', 0.99, 1.0)
-    else:
-        criterion = ClassBalanceLoss(args.class_count, args.num_classes, 'cross_entropy', 0.99, 1.0)
+    criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.1)
     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
