@@ -278,7 +278,7 @@ class CONDataset(data.Dataset):
                 #     -> raise exception if one of the sequences is not created with the specified alphabet
                 try:
                     if self.ext == 'fasta':
-                        positions = find_kmer_positions(self.data[sample].seq, self.kmer_dict, self.kmer_size)
+                        positions = find_kmer_positions(self.data[sample].seq.upper(), self.kmer_dict, self.kmer_size)
                     elif self.ext == 'seq.gz':
                         positions = find_kmer_positions(self.data[sample], self.kmer_dict, self.kmer_size)
                 except ValueError:
@@ -311,7 +311,7 @@ class CONDataset(data.Dataset):
             #     -> raise exception if one of the sequences is not created with the specified alphabet
             try:
                 if self.ext == 'fasta':
-                    positions = find_kmer_positions(self.data[idx].seq, self.kmer_dict, self.kmer_size)
+                    positions = find_kmer_positions(self.data[idx].seq.upper(), self.kmer_dict, self.kmer_size)
                 elif self.ext == 'seq.gz':
                     positions = find_kmer_positions(self.data[idx], self.kmer_dict, self.kmer_size)
             except ValueError:

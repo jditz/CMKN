@@ -62,8 +62,9 @@ def find_kmer_positions(sequence, kmer_dict, kmer_size):
             #   -> if k-mere is not part of the dictionary, the sequence is not created using the specified
             #      alphabet
             if sequence[x:y] not in kmer_dict:
-                raise ValueError('Substring not found in k-mere dictionary! ' +
-                                 'The sequence \'{}\' was NOT build using the specified alphabet.'.format(sequence))
+                raise ValueError('Substring \'' + sequence[x:y] + '\' not found in k-mere dictionary!\n' +
+                                 '            The sequence ' +
+                                 '\'{}\' was NOT build using the specified alphabet.'.format(sequence))
 
             # append start position of the current k-mer to the corresponding list of positions
             positions[kmer_dict.get(sequence[x:y])].append(x)
@@ -135,7 +136,7 @@ def build_kmer_ref_from_file(filepath, extension, kmer_dict, kmer_size):
             data_size += 1
 
             # get kmer positions in the current sequence
-            positions = find_kmer_positions(record.seq, kmer_dict, kmer_size)
+            positions = find_kmer_positions(record.seq.upper(), kmer_dict, kmer_size)
 
             # update reference tensor
             for i, pos in enumerate(positions):
@@ -188,7 +189,7 @@ def build_kmer_ref_from_list(seq_list, kmer_dict, kmer_size):
 
         if (c % 10000) == 0:
             toc = timer()
-            print("Finished {} samples, elapsed time: {:.2f}min\n".format(c, (toc - tic) / 60))
+            print("Finished {} samples, elapsed time: {:.2f}min".format(c, (toc - tic) / 60))
 
         c += 1
 

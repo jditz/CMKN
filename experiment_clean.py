@@ -8,7 +8,7 @@ from torch.utils.data import Subset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.optim as optim
 import numpy as np
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
 
 from con import (CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref_from_file, build_kmer_ref_from_list,
                  compute_metrics)
@@ -26,22 +26,22 @@ DATA_DIR = './data/'
 
 # extend custom data handler for the used dataset
 class CustomHandler(CONDataset):
-    def __init__(self, filepath, kmer_size=3, drug='SQV', nb_classes=3, clean_set=True):
-        if drug == 'SQV':
+    def __init__(self, filepath, kmer_size=3, drug='FPV', nb_classes=3, clean_set=True):
+        if drug == 'FPV':
             self.drug_nb = 7
-        elif drug == 'LPV':
-            self.drug_nb = 8
-        elif drug == 'DRV':
-            self.drug_nb = 9
         elif drug == 'ATV':
+            self.drug_nb = 8
+        elif drug == 'IDV':
+            self.drug_nb = 9
+        elif drug == 'LPV':
             self.drug_nb = 10
         elif drug == 'NFV':
             self.drug_nb = 11
-        elif drug == 'IDV':
+        elif drug == 'SQV':
             self.drug_nb = 12
-        elif drug == 'FPV':
-            self.drug_nb = 13
         elif drug == 'TPV':
+            self.drug_nb = 13
+        elif drug == 'DRV':
             self.drug_nb = 14
         else:
             raise ValueError('The dataset does not contain any information about drug resilience of HIV' +
@@ -57,11 +57,11 @@ class CustomHandler(CONDataset):
 
         self.nb_classes = nb_classes
         if nb_classes == 2:
-            self.class_to_idx = {'H': 0, 'M': 0, 'L': 1}
-            self.all_categories = ['res', 'no_res']
+            self.class_to_idx = {'L': 0, 'M': 1, 'H': 1}
+            self.all_categories = ['susceptible', 'resistant']
         else:
-            self.class_to_idx = {'H': 0, 'M': 1, 'L': 2}
-            self.all_categories = ['H', 'M', 'L']
+            self.class_to_idx = {'L': 0, 'M': 1, 'H': 2}
+            self.all_categories = ['L', 'M', 'H']
 
     def __getitem__(self, idx):
         # get a sample using the parent __getitem__ function
@@ -83,7 +83,8 @@ class CustomHandler(CONDataset):
                     else:
                         labels[i, self.class_to_idx[aux_lab]] = 1.0
 
-            except:
+            except Exception as e:
+                print('Exception at index {}:'.format(idx), e)
                 continue
 
         # return the sample with updated label tensor
@@ -91,6 +92,40 @@ class CustomHandler(CONDataset):
         return sample
 
 
+# custom handler for the HIV dataset used by Steiner et al., 2020
+class HivHandler(CONDataset):
+    def __init__(self, filepath, kmer_size=3):
+        super(HivHandler, self).__init__(filepath, kmer_size=kmer_size, alphabet='PROTEIN_FULL')
+
+    def __getitem__(self, idx):
+        # get a sample using the parent __getitem__ function
+        sample = super(HivHandler, self).__getitem__(idx)
+
+        # initialize label tensor
+        if len(sample[1]) == 1:
+            labels = torch.zeros(2)
+        else:
+            labels = torch.zeros(len(sample[1]), 2)
+
+        # iterate through all id strings and update the label tensor, accordingly
+        for i, id_str in enumerate(sample[1]):
+            try:
+                aux_lab = int(id_str.split('_')[1])
+                if len(sample[1]) == 1:
+                    labels[aux_lab] = 1.0
+                else:
+                    labels[i, aux_lab] = 1.0
+
+            except Exception as e:
+                print('Exception at index {}:'.format(idx), e)
+                continue
+
+        # return the sample with updated label tensor
+        sample = (sample[0], labels)
+        return sample
+
+
+# custom handler for the ENCODE dataset used by DeepBind and CKN papers
 class EncodeHandler(CONDataset):
     def __init__(self, datadir, ext='seq.gz', kmer_size=8, tfid=None, nb_classes=2):
         super(EncodeHandler, self).__init__(datadir, ext=ext, kmer_size=kmer_size, tfid=tfid)
@@ -278,47 +313,53 @@ def load_args():
     return args
 
 
-def count_classes_hiv(filepath, verbose=False, drug=7, num_classes=3):
+def count_classes_hiv(filepath, verbose=False, drug=7, num_classes=2):
     class_count = [0] * num_classes
     label_vec = []
     nb_samples = 0
 
     with open(filepath, 'rU') as handle:
         for record in SeqIO.parse(handle, 'fasta'):
-            aux_lab = record.id.split('|')[drug]
-            if num_classes == 2:
-                if aux_lab == 'H':
-                    class_count[0] += 1
-                    label_vec.append(0)
-                elif aux_lab == 'M':
-                    class_count[0] += 1
-                    label_vec.append(0)
-                elif aux_lab == 'L':
-                    class_count[1] += 1
-                    label_vec.append(1)
-                else:
-                    continue
+            if drug == -1:
+                aux_lab = int(record.id.split('_')[1])
+                class_count[aux_lab] += 1
+                label_vec.append(aux_lab)
             else:
-                if aux_lab == 'H':
-                    class_count[0] += 1
-                    label_vec.append(0)
-                elif aux_lab == 'M':
-                    class_count[1] += 1
-                    label_vec.append(1)
-                elif aux_lab == 'L':
-                    class_count[2] += 1
-                    label_vec.append(2)
+                aux_lab = record.id.split('|')[drug]
+                if num_classes == 2:
+                    if aux_lab == 'H':
+                        class_count[1] += 1
+                        label_vec.append(1)
+                    elif aux_lab == 'M':
+                        class_count[1] += 1
+                        label_vec.append(1)
+                    elif aux_lab == 'L':
+                        class_count[0] += 1
+                        label_vec.append(0)
+                    else:
+                        continue
                 else:
-                    continue
+                    if aux_lab == 'H':
+                        class_count[2] += 1
+                        label_vec.append(2)
+                    elif aux_lab == 'M':
+                        class_count[1] += 1
+                        label_vec.append(1)
+                    elif aux_lab == 'L':
+                        class_count[0] += 1
+                        label_vec.append(0)
+                    else:
+                        continue
             nb_samples += 1
 
     if verbose:
         print("number of samples in dataset: {}".format(nb_samples))
         if num_classes == 2:
-            print("class balance: pos = {}, neg = {}".format(class_count[0] / nb_samples, class_count[1] / nb_samples))
+            print("class balance: resistant = {}, susceptible = {}".format(class_count[1] / nb_samples,
+                                                                           class_count[0] / nb_samples))
         else:
-            print("class balance: H = {}, M = {}, L = {}".format(class_count[0] / nb_samples, class_count[1] /
-                                                                 nb_samples, class_count[2] / nb_samples))
+            print("class balance: H = {}, M = {}, L = {}".format(class_count[2] / nb_samples, class_count[1] /
+                                                                 nb_samples, class_count[0] / nb_samples))
 
     if num_classes == 2:
         expected_loss = -(class_count[0] / nb_samples) * np.log(0.5) - \
@@ -332,10 +373,10 @@ def count_classes_hiv(filepath, verbose=False, drug=7, num_classes=3):
         print("expected loss: {}".format(expected_loss))
 
     if num_classes == 2:
-        rand_guess = (class_count[0] / nb_samples) * 0.5 + (class_count[1] / nb_samples) * 0.5
+        rand_guess = (class_count[0] / nb_samples) ** 2 + (class_count[1] / nb_samples) ** 2
     else:
-        rand_guess = (class_count[0] / nb_samples) * 0.33 + (class_count[1] / nb_samples) * 0.33 + \
-                     (class_count[2] / nb_samples) * 0.33
+        rand_guess = (class_count[0] / nb_samples) ** 2 + (class_count[1] / nb_samples) ** 2 + \
+                     (class_count[2] / nb_samples) ** 2
 
     if verbose:
         print("expected accuracy with random guessing: {}".format(rand_guess))
@@ -343,8 +384,8 @@ def count_classes_hiv(filepath, verbose=False, drug=7, num_classes=3):
     return class_count, expected_loss, np.array(label_vec)
 
 
-def count_classes_encode(labels, verbose=True, num_classes=2):
-    class_count = [0] * num_classes
+def count_classes_encode(labels, verbose=True):
+    class_count = [0, 0]
     nb_samples = 0
 
     for label in labels:
@@ -353,28 +394,14 @@ def count_classes_encode(labels, verbose=True, num_classes=2):
 
     if verbose:
         print("number of samples in dataset: {}".format(nb_samples))
-        if num_classes == 2:
-            print("class balance: pos = {}, neg = {}".format(class_count[0] / nb_samples, class_count[1] / nb_samples))
-        else:
-            print("class balance: H = {}, M = {}, L = {}".format(class_count[0] / nb_samples, class_count[1] /
-                                                                 nb_samples, class_count[2] / nb_samples))
+        print("class balance: pos = {}, neg = {}".format(class_count[1] / nb_samples, class_count[0] / nb_samples))
 
-    if num_classes == 2:
-        expected_loss = -(class_count[0] / nb_samples) * np.log(0.5) - \
-                        (class_count[1] / nb_samples) * np.log(0.5)
-    else:
-        expected_loss = -(class_count[0] / nb_samples) * np.log(0.33) - \
-                        (class_count[1] / nb_samples) * np.log(0.33) -\
-                        (class_count[2] / nb_samples) * np.log(0.33)
+    expected_loss = -(class_count[0] / nb_samples) * np.log(0.5) - (class_count[1] / nb_samples) * np.log(0.5)
 
     if verbose:
         print("expected loss: {}".format(expected_loss))
 
-    if num_classes == 2:
-        rand_guess = (class_count[0] / nb_samples) * 0.5 + (class_count[1] / nb_samples) * 0.5
-    else:
-        rand_guess = (class_count[0] / nb_samples) * 0.33 + (class_count[1] / nb_samples) * 0.33 + \
-                     (class_count[2] / nb_samples) * 0.33
+    rand_guess = (class_count[0] / nb_samples) ** 2 + (class_count[1] / nb_samples) ** 2
 
     if verbose:
         print("expected accuracy with random guessing: {}".format(rand_guess))
@@ -449,7 +476,7 @@ def train_hiv():
 
     # train model
     acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
-                                epochs=args.nb_epochs)
+                                epochs=args.nb_epochs, use_cuda=args.use_cuda)
 
     # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
     # model
@@ -492,6 +519,84 @@ def train_hiv():
         print("Cannot import matplotlib.pyplot")
 
 
+def train_hiv_steiner():
+    # read parameters for the current run
+    args = load_args()
+    args.alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
+
+    # create dictionary that maps kmers to index
+    kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
+
+    # build tensor holding reference positions
+    ref_pos = build_kmer_ref_from_file(args.filepath, args.extension, kmer_dict, args.kmer_size)
+
+    # load data
+    data_all = HivHandler(args.filepath, kmer_size=args.kmer_size)
+
+    # get labels of each entry for stratified shuffling and distribution of classes for class balance loss
+    args.class_count, args.expected_loss, label_vec = count_classes_hiv(args.filepath, True, -1, 2)
+
+    # create indices for training and validation splits
+    #  -> a stratified cross-validation will be performed
+    dataset_size = len(data_all)
+    indices = np.arange(dataset_size)
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=args.seed)
+
+    # perform stratified cross-validation
+    for fold, split_idx in enumerate(skf.split(indices, label_vec)):
+        # initialize con model
+        model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
+                     strides=args.strides, paddings=args.paddings, num_classes=2,
+                     kernel_args=[args.sigma, args.scale])
+
+        # split dataset into training and validation samples
+        args.train_indices, args.val_indices = indices[split_idx[0]], indices[split_idx[1]]
+
+        # Creating PyTorch data samplers and loaders:
+        data_train = Subset(data_all, args.train_indices)
+        data_val = Subset(data_all, args.val_indices)
+
+        loader_train = DataLoader(data_train, batch_size=args.batch_size)
+        loader_val = DataLoader(data_val, batch_size=args.batch_size)
+
+        # set loss function and optimization algorithm
+        criterion = ClassBalanceLoss(args.class_count, 2, 'sigmoid', 0.99, 1.0)
+        optimizer = optim.Adam(model.parameters(), lr=0.1)
+        lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
+
+        # train model
+        acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, epochs=args.nb_epochs,
+                                    early_stop=False, use_cuda=args.use_cuda)
+
+        # access performance on validation set
+        pred_y, true_y = model.predict(loader_val, proba=True)
+        scores = compute_metrics(true_y, pred_y)
+
+        # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+        # model
+        torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss,
+                    'val_performance': scores},
+                   args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_fold" + str(fold) + ".pkl")
+
+        try:
+            # try to import pyplot
+            import matplotlib.pyplot as plt
+
+            # show the position of the anchor points as a histogram
+            anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
+            anchor = anchor.detach().numpy()
+            fig = plt.figure()
+            plt.hist(anchor, bins=ref_pos.size(1))
+            plt.xlabel('Position')
+            plt.ylabel('# Anchor Points')
+            plt.title('Distribution of anchor points')
+            # plt.show()
+            plt.savefig(args.outdir + "/anchor_positions_fold" + str(fold) + ".png")
+
+        except:
+            print("Cannot import matplotlib.pyplot")
+
+
 def train_encode():
     # load parameters
     args = load_args()
@@ -499,7 +604,7 @@ def train_encode():
 
     # specify the 100 randomly selected datasets used for hyper-parameter optimization
     if args.encodeset == "optim":
-        optim_ids = ['BHLHE40_A549_BHLHE40_Stanford', 'RAD21_H1-hESC_Rad21_HudsonAlpha', 'CTCF_AG04450_CTCF_UW',
+        train_ids = ['BHLHE40_A549_BHLHE40_Stanford', 'RAD21_H1-hESC_Rad21_HudsonAlpha', 'CTCF_AG04450_CTCF_UW',
                      'CTCF_HSMMtube_CTCF_Broad', 'CTCF_HCFaa_CTCF_UW', 'TEAD4_K562_TEAD4_(SC-101184)_HudsonAlpha',
                      'RXRA_HepG2_RXRA_HudsonAlpha', 'HDAC2_K562_HDAC2_(A300-705A)_Broad', 'CTCF_H1-hESC_CTCF_UT-A',
                      'SIX5_H1-hESC_SIX5_HudsonAlpha', 'SIRT6_K562_SIRT6_Harvard', 'HMGN3_K562_HMGN3_Harvard',
@@ -537,100 +642,98 @@ def train_encode():
                      'CTCF_H1-hESC_CTCF_(SC-5916)_HudsonAlpha', 'CTCF_NHDF-Ad_CTCF_Broad',
                      'POLR2A_GM19099_Pol2_Stanford'
                      ]
+    else:
+        train_ids = [args.encodeset]
 
     # create ENCODE dataset handle
     data_all = EncodeHandler(args.filepath, kmer_size=args.kmer_size)
 
-    # load the correct dataset
-    if args.encodeset == "optim":
-        data_all.update_dataset(optim_ids)
-    else:
-        data_all.update_dataset(args.encodeset)
+    # iterate over all ids used in this trainings round
+    for tfid in train_ids:
+        # update the dataset to the correct transcription factor
+        data_all.update_dataset(tfid)
 
-    # create dictionary that maps kmers to index
-    kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
+        # create dictionary that maps kmers to index
+        kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
 
-    # build tensor holding reference positions
-    if args.encodeset == "optim":
-        ref_pos = torch.load("{}/ENCODE_optim_ref_kmer{}.pkl".format(args.filepath, args.kmer_size))
-    else:
+        # build tensor holding reference positions
         ref_pos = build_kmer_ref_from_list(data_all.data, kmer_dict, args.kmer_size)
 
-    # initialize con model
-    model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
-                 strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
-                 kernel_args=[args.sigma, args.scale])
+        # initialize con model
+        model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
+                     strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
+                     kernel_args=[args.sigma, args.scale])
 
-    # Creating data indices for training and validation splits:
-    validation_split = .2
-    shuffle_dataset = True
-    random_seed = args.seed
-    dataset_size = len(data_all)
-    indices = list(range(dataset_size))
-    split = int(np.floor(validation_split * dataset_size))
-    if shuffle_dataset:
-        np.random.seed(random_seed)
-        np.random.shuffle(indices)
-    args.train_indices, args.val_indices = indices[split:], indices[:split]
+        # Creating data indices for training and validation splits:
+        validation_split = .2
+        shuffle_dataset = True
+        random_seed = args.seed
+        dataset_size = len(data_all)
+        indices = list(range(dataset_size))
+        split = int(np.floor(validation_split * dataset_size))
+        if shuffle_dataset:
+            np.random.seed(random_seed)
+            np.random.shuffle(indices)
+        args.train_indices, args.val_indices = indices[split:], indices[:split]
 
-    # Creating PyTorch data samplers and loaders:
-    data_train = Subset(data_all, args.train_indices)
-    data_val = Subset(data_all, args.val_indices)
+        # Creating PyTorch data samplers and loaders:
+        data_train = Subset(data_all, args.train_indices)
+        data_val = Subset(data_all, args.val_indices)
 
-    loader_train = DataLoader(data_train, batch_size=args.batch_size)
-    loader_val = DataLoader(data_val, batch_size=args.batch_size)
+        loader_train = DataLoader(data_train, batch_size=args.batch_size)
+        loader_val = DataLoader(data_val, batch_size=args.batch_size)
 
-    # get distribution of classes for class balance loss
-    args.class_count, args.expected_loss = count_classes_encode(data_all.labels, True, args.num_classes)
+        # get distribution of classes for class balance loss
+        args.class_count, args.expected_loss = count_classes_encode(data_all.labels, True)
 
-    # initialize optimizer and loss function
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.1)
-    lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
+        # initialize optimizer and loss function
+        criterion = nn.BCEWithLogitsLoss()
+        optimizer = optim.Adam(model.parameters(), lr=0.1)
+        lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
-    # train model
-    acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
-                                epochs=args.nb_epochs)
+        # train model
+        acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
+                                    epochs=args.nb_epochs, use_cuda=args.use_cuda)
 
-    # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
-    # model
-    torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss},
-               args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + ".pkl")
+        # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+        # model
+        torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss},
+                   args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_" + tfid + ".pkl")
 
-    try:
-        # try to import pyplot
-        import matplotlib.pyplot as plt
+        try:
+            # try to import pyplot
+            import matplotlib.pyplot as plt
 
-        # show the evolution of the acc and loss
-        fig2, axs2 = plt.subplots(2, 2)
-        axs2[0, 0].plot(acc['train'])
-        axs2[0, 0].set_title("train accuracy")
-        axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
-        axs2[0, 1].plot(acc['val'])
-        axs2[0, 1].set_title("val accuracy")
-        axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
-        axs2[1, 0].plot(loss['train'])
-        axs2[1, 0].set_title("train loss")
-        axs2[1, 0].set(xlabel='epoch', ylabel='loss')
-        axs2[1, 1].plot(loss['val'])
-        axs2[1, 1].set_title("val loss")
-        axs2[1, 1].set(xlabel='epoch', ylabel='loss')
-        # plt.show()
-        plt.savefig(args.outdir + "/acc_loss.png")
+            # show the evolution of the acc and loss
+            fig2, axs2 = plt.subplots(2, 2)
+            axs2[0, 0].plot(acc['train'])
+            axs2[0, 0].set_title("train accuracy")
+            axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
+            axs2[0, 1].plot(acc['val'])
+            axs2[0, 1].set_title("val accuracy")
+            axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
+            axs2[1, 0].plot(loss['train'])
+            axs2[1, 0].set_title("train loss")
+            axs2[1, 0].set(xlabel='epoch', ylabel='loss')
+            axs2[1, 1].plot(loss['val'])
+            axs2[1, 1].set_title("val loss")
+            axs2[1, 1].set(xlabel='epoch', ylabel='loss')
+            # plt.show()
+            plt.savefig(args.outdir + "/acc_loss_" + tfid + ".png")
 
-        # show the position of the anchor points as a histogram
-        anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
-        anchor = anchor.detach().numpy()
-        fig3 = plt.figure()
-        plt.hist(anchor, bins=ref_pos.size(1))
-        plt.xlabel('Position')
-        plt.ylabel('# Anchor Points')
-        plt.title('Distribution of anchor points')
-        # plt.show()
-        plt.savefig(args.outdir + "/anchor_positions.png")
+            # show the position of the anchor points as a histogram
+            anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
+            anchor = anchor.detach().numpy()
+            fig3 = plt.figure()
+            plt.hist(anchor, bins=ref_pos.size(1))
+            plt.xlabel('Position')
+            plt.ylabel('# Anchor Points')
+            plt.title('Distribution of anchor points')
+            # plt.show()
+            plt.savefig(args.outdir + "/anchor_positions_" + tfid + ".png")
 
-    except:
-        print("Cannot import matplotlib.pyplot")
+        except:
+            print("Cannot import matplotlib.pyplot")
 
 
 def test_encode(datapath, modelpath):
@@ -683,7 +786,8 @@ def test_encode(datapath, modelpath):
 
 def main(exp):
     if exp == 'HIV':
-        train_hiv()
+        #train_hiv()
+        train_hiv_steiner()
     elif exp == 'ENCODE':
         train_encode()
     elif exp == 'ENCODE_TEST':
