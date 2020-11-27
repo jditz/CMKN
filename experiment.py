@@ -575,7 +575,7 @@ def train_hiv_steiner():
         # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
         # model
         torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss,
-                    'val_performance': scores},
+                    'val_performance': scores.to_dict()},
                    args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_fold" + str(fold) + ".pkl")
 
         try:
