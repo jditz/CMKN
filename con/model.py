@@ -796,36 +796,37 @@ class CON2(nn.Module):
 
         # initialize the additional "normal" convolutional layers
         self.nb_conv_layers = len(out_channels_list) - 1
-        convlayers = []
-        for i in range(1, len(out_channels_list)):
+        if self.nb_conv_layers > 0:
+            convlayers = []
+            for i in range(1, len(out_channels_list)):
 
-            # set padding parameter dependent on the selected padding type
-            if paddings[i-1] == "SAME":
-                padding = (filter_sizes[i-1] - 1) // 2
-            else:
-                padding = 0
+                # set padding parameter dependent on the selected padding type
+                if paddings[i-1] == "SAME":
+                    padding = (filter_sizes[i-1] - 1) // 2
+                else:
+                    padding = 0
 
-            # initialize the "normal" convolutional layers
-            #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
-            convlayers.append(nn.Conv1d(out_channels_list[i-1], out_channels_list[i], kernel_size=filter_sizes[i-1],
-                                        stride=1, padding=padding))
+                # initialize the "normal" convolutional layers
+                #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
+                convlayers.append(nn.Conv1d(out_channels_list[i-1], out_channels_list[i], kernel_size=filter_sizes[i-1],
+                                            stride=1, padding=padding))
 
-            # perform batch normalization after each conv layer (if set to True)
-            if batch_norm:
-                convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
+                # perform batch normalization after each conv layer (if set to True)
+                if batch_norm:
+                    convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
 
-            # use rectifiedLinearUnit as activation function
-            convlayers.append(nn.ReLU(inplace=True))
+                # use rectifiedLinearUnit as activation function
+                convlayers.append(nn.ReLU(inplace=True))
 
-            # use dropout after each conv layer (if set to True)
-            if dropout:
-                convlayers.append(nn.Dropout())
+                # use dropout after each conv layer (if set to True)
+                if dropout:
+                    convlayers.append(nn.Dropout())
 
-            # add max pooling
-            convlayers.append(poolings[pool](kernel_size=filter_sizes[i-1], stride=strides[i], padding=padding))
+                # add max pooling
+                convlayers.append(poolings[pool](kernel_size=filter_sizes[i-1], stride=strides[i], padding=padding))
 
-        # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
-        self.conv = nn.Sequential(*convlayers)
+            # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
+            self.conv = nn.Sequential(*convlayers)
 
         # set the number of output features
         #   -> this is the number of output channels of the last CON layer
@@ -878,7 +879,7 @@ class CON2(nn.Module):
             return output
 
     def unsup_train_classifier(self, data_loader, criterion=None, use_cuda=False):
-        """ This function initializes the classification layer in an unsupervised fashion
+        """ This function initializes the classification layer (only LinearMax) in an unsupervised fashion
 
         - **Parameters**::
 
@@ -989,15 +990,16 @@ class CON2(nn.Module):
         self.oligo.unsup_train(self.seq_len)
 
         # iterate over all convolutional layers
-        for i, layer in enumerate(self.conv):
+        if self.nb_conv_layers > 0:
+            for i, layer in enumerate(self.conv):
 
-            # initialize the convolutional layer
-            if isinstance(layer, nn.Conv1d):
-                print("Initializing layer {} (conv layer)...".format(i+1))
+                # initialize the convolutional layer
+                if isinstance(layer, nn.Conv1d):
+                    print("Initializing layer {} (conv layer)...".format(i+1))
 
-                # initializing weights using the He initialization (also called Kaiming initialization)
-                #   -> only use this initialization if ReLU activation is used
-                nn.init.kaiming_uniform_(layer.weight, mode='fan_in', nonlinearity='relu')
+                    # initializing weights using the He initialization (also called Kaiming initialization)
+                    #   -> only use this initialization if ReLU activation is used
+                    nn.init.kaiming_uniform_(layer.weight, mode='fan_in', nonlinearity='relu')
 
     def sup_train(self, train_loader, criterion, optimizer, lr_scheduler=None, epochs=100, val_loader=None,
                   use_cuda=False, early_stop=True):
@@ -1047,6 +1049,7 @@ class CON2(nn.Module):
 
         # initialize variables to keep track of the epoch's loss, the best loss, and the best accuracy
         epoch_loss = None
+        best_epoch = 0
         best_loss = float('inf')
         best_acc = 0
 
@@ -1062,7 +1065,9 @@ class CON2(nn.Module):
             self.train(False)
 
             # for each epoch, calculate a new fit for the linear classifier using the current state of the model
-            #self.unsup_train_classifier(train_loader, criterion, use_cuda=use_cuda)
+            # (do that iff classification layer is LinearMax)
+            if isinstance(self.classifier, LinearMax):
+                self.unsup_train_classifier(train_loader, criterion, use_cuda=use_cuda)
 
             # iterate over all phases of the training process
             for phase in phases:
@@ -1157,6 +1162,7 @@ class CON2(nn.Module):
                     # backward propagate + optimize only if in training phase
                     if phase == 'train':
                         loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.oligo.parameters(), 0.5)
                         optimizer.step()
                         self.normalize_()
 
@@ -1176,6 +1182,7 @@ class CON2(nn.Module):
 
                 # deep copy the model
                 if (phase == 'val') and epoch_loss < best_loss:
+                    best_epoch = epoch + 1
                     best_acc = epoch_acc
                     best_loss = epoch_loss
 
@@ -1188,8 +1195,7 @@ class CON2(nn.Module):
 
         # report training results
         print('Finish at epoch: {}'.format(epoch + 1))
-        print('Best val Acc: {:4f}'.format(best_acc))
-        print('Best val loss: {:4f}'.format(best_loss))
+        print('Best epoch: {} with Acc = {:4f} and loss = {:4f}'.format(best_epoch, best_acc, best_loss))
 
         # if early stopping is enabled, make sure that the parameters are used, which resulted in the best
         # generalization error

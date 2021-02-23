@@ -22,7 +22,6 @@ class CONLayer(nn.Conv1d):
     """ Convolutional Oligo Kernel Network Layer
 
     This class implements one layer of a convolutional Oligo Kernel Network (CON).
-    TODO: Everything
     """
     def __init__(self, out_channels, ref_kmerPos, dilation=1, groups=1, subsampling=1,
                  kernel_func="exp", kernel_args=[1, 1], kernel_args_trainable=False):
@@ -50,7 +49,7 @@ class CONLayer(nn.Conv1d):
         """
         # set the number of input channels
         #   -> this value is always 2 for the oligo kernel layer, therefore it is not a parameter that can be assigned
-        #      a value by the user
+        #      by the user
         self.in_channels = 2
 
         # set filter size and padding parameter for the underlying convolutional network architecture.
@@ -67,7 +66,13 @@ class CONLayer(nn.Conv1d):
         self.subsampling = subsampling
         self.filter_size = filter_size
         self.patch_dim = self.in_channels * self.filter_size
+
+        # add the oligomer position encoding matrix for the reference sequence as a buffer to the model
+        self.register_buffer("ref_kmerPos", torch.Tensor(ref_kmerPos.shape[0], ref_kmerPos.shape[1]))
         self.ref_kmerPos = ref_kmerPos
+
+        # register a buffer to hold the oligomer position comparison term
+        self.register_buffer('poscomp', None)
 
         # specify if the linear transformation factor will be calculated
         self._need_lintrans_computed = True
@@ -103,6 +108,47 @@ class CONLayer(nn.Conv1d):
         if self.training is True:
             self._need_lintrans_computed = True
 
+    def _compute_poscomp(self, phi):
+        """Compute the oligomer position comparison matrix E_{X,W}
+
+        - **Parameters**::
+
+            :param phi: Matrix containing decoded oligomer starting position information about the input sequence
+                :type phi: tensor (batch_size x #oligomers x seq_len)
+        """
+        # register the position comparison matrix as a buffer
+        if (self.poscomp is None) or (self.poscomp.shape[0] != phi.shape[0]):
+            self.poscomp = phi.new_empty((phi.shape[0], self.out_channels, phi.shape[-1]))
+
+        # get the sequence position of each anchor point
+        z_pos = (torch.acos(self.weight[:, 0]) / np.pi) * (phi.shape[-1] - 1)
+        z_pos = z_pos.view(-1).detach()
+
+        # calculate the phi(z) vector for the current anchor point
+        #   -> since the position will be a float in most cases, this vector is a weighted combination
+        #      from two positions in self.ref_kmerPos
+        #   -> make sure to prevent out of index errors
+        if all(z_pos < (phi.shape[-1] - 1)):
+            phi_z = ((1 - (z_pos % 1)) * self.ref_kmerPos[:, (z_pos // 1).numpy()] +
+                     (z_pos % 1) * self.ref_kmerPos[:, (z_pos // 1).numpy() + 1]) / 2
+        else:
+            phi_z = self.ref_kmerPos[:, (z_pos // 1).numpy()]
+
+        # fill out the dot product tensor by iterating in following order
+        #   1. over the batch size
+        #   2. over all anchor points
+        #   3. over all positions
+        #for i in range(self.poscomp.shape[0]):
+        #    for j in range(self.poscomp.shape[1]):
+        #        for k in range(self.poscomp.shape[2]):
+        #            # calculate the dot product
+        #            # dot_phi[j, :, i] = torch.bmm(phi[j, :, i].view(1, 1, -1),
+        #            #                             phi_z.type(x_in.type()).view(1, -1, len(z_pos)))
+        #            self.poscomp.data[i, j, k] = torch.dot(phi_z[:, j], phi[i, :, k])
+        for i in range(self.poscomp.shape[0]):
+            for j in range(self.poscomp.shape[2]):
+                self.poscomp.data[i, :, j] = (phi[i, :, j].view(-1, 1) * phi_z).sum(0)
+
     def _compute_lintrans(self):
         """Compute the linear transformation factor kappa(ZtZ)^(-1/2)
 
@@ -125,7 +171,7 @@ class CONLayer(nn.Conv1d):
 
         return lintrans
 
-    def _conv_layer(self, x_in, phi):
+    def _conv_layer(self, x_in):
         """Convolution layer
 
         This layer computes the convolution: x_out = <phi(p), phi(Z)> * kappa(Zt p)
@@ -134,51 +180,20 @@ class CONLayer(nn.Conv1d):
 
             :param x_in: Input tensor storing the function values phi(p)
                 :type x_in: Tensor (batch_size x in_channels x |S|)
-            :param phi: Tensor storing the one-hot-encoding phi(pos) for each position of the input
-                :type phi: Tensor (batch_size x nb_kmer x |S|)
 
         - **Returns**::
 
             :return x_out: Result of the convolution
                 :rtype x_out: Tensor (batch_size x out_channels x |S|)
         """
-        # create the input tensor
-        in_size = x_in.size()
-
-        # calculate dot product between input and anchor points
+        # calculate the convolution between input and anchor points
         x_out = super(CONLayer, self).forward(x_in)
 
-        # evaluate kernel function with the calculated dot product
+        # evaluate kernel function with the result
         x_out = self.kappa(x_out)
 
-        # get the sequence position of each anchor point
-        z_pos = (torch.acos(self.weight[:, 0]) / np.pi) * (in_size[-1] - 1)
-        z_pos = z_pos.detach()
-
-        # initialize the tensor that holds <phi(x), phi(z)>
-        dot_phi = torch.zeros([in_size[0], self.out_channels, in_size[-1]], requires_grad=False)
-
-        # fill out the dot product tensor by iterating in following order
-        #   1. over all positions
-        #   2. over the batch size
-        for i in range(in_size[-1]):
-            for j in range(in_size[0]):
-                # calculate the phi(z) vector for the current anchor point
-                #   -> since the position will be a float in most cases, this vector is a weighted combination
-                #      from two positions in self.ref_kmerPos
-                #   -> make sure to prevent out of index errors
-                if all(z_pos < (in_size[-1] - 1)):
-                    phi_z = ((1 - (z_pos % 1)) * self.ref_kmerPos[:, (z_pos // 1).numpy()] +
-                             (z_pos % 1) * self.ref_kmerPos[:, (z_pos // 1).numpy() + 1]) / 2
-                else:
-                    phi_z = self.ref_kmerPos[:, (z_pos // 1).numpy()]
-
-                # calculate the dot product
-                dot_phi[j, :, i] = torch.bmm(phi[j, :, i].view(1, 1, -1),
-                                             phi_z.type(x_in.type()).view(1, -1, len(z_pos)))
-
         # multiply kernel function evaluation with the position comparison term
-        x_out = dot_phi * x_out
+        x_out = self.poscomp * x_out * (np.sqrt(np.pi) * self.kernel_args[0])
         return x_out
 
     def _mult_layer(self, x_in, lintrans):
@@ -217,8 +232,11 @@ class CONLayer(nn.Conv1d):
             :param phi: Tensor storing the one-hot-encoding phi(pos) for each position of the input
                 :type phi: Tensor (batch_size x nb_kmer x |S|)
         """
+        # compute the oligomer position comparison matrix
+        self._compute_poscomp(phi)
+
         # perform the convolution
-        x_out = self._conv_layer(x_in, phi)
+        x_out = self._conv_layer(x_in)
 
         # calculate the linear transformation factor (if needed)
         lintrans = self._compute_lintrans()

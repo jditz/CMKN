@@ -227,88 +227,65 @@ def load_args():
 
     # if an output directory is specified, create the dir structure to store the output of the current run
     args.save_logs = False
-    if args.type == 'HIV' or (args.type == 'ENCODE' and args.encodeset == 'optim'):
-        if args.outdir != "":
-            args.save_logs = True
-            outdir = args.outdir
+    if args.outdir != "":
+        args.save_logs = True
+        outdir = args.outdir
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        outdir = outdir + "/{}".format(NAME)
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        if args.type == 'HIV':
+            outdir = outdir + "/{}".format(args.drug)
             if not os.path.exists(outdir):
                 try:
                     os.makedirs(outdir)
                 except:
                     pass
-            outdir = outdir + "/{}".format(NAME)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-            if args.type == 'HIV':
-                outdir = outdir + "/{}".format(args.drug)
-                if not os.path.exists(outdir):
-                    try:
-                        os.makedirs(outdir)
-                    except:
-                        pass
-            else:
-                outdir = outdir + "/{}".format(args.encodeset)
-                if not os.path.exists(outdir):
-                    try:
-                        os.makedirs(outdir)
-                    except:
-                        pass
-            outdir = outdir + "/classes_{}".format(args.num_classes)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-            outdir = outdir + "/kmer_{}".format(args.kmer_size)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-            outdir = outdir + "/params_{}_{}".format(args.sigma, args.scale)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-            outdir = outdir + '/anchors_{}'.format(args.out_channels[0])
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-            outdir = outdir + '/layers_{}'.format(args.n_layer)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-            args.outdir = outdir
-    else:
-        if args.outdir != "":
-            args.save_logs = True
-            outdir = args.outdir
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-            outdir = outdir + "/{}".format(NAME)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
+        else:
             outdir = outdir + "/{}".format(args.encodeset)
             if not os.path.exists(outdir):
                 try:
                     os.makedirs(outdir)
                 except:
                     pass
-            args.outdir = outdir
+        outdir = outdir + "/classes_{}".format(args.num_classes)
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        outdir = outdir + "/kmer_{}".format(args.kmer_size)
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        outdir = outdir + "/params_{}_{}".format(args.sigma, args.scale)
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        outdir = outdir + '/anchors_{}'.format(args.out_channels[0])
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        outdir = outdir + '/layers_{}'.format(args.n_layer)
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except:
+                pass
+        args.outdir = outdir
 
     return args
 
@@ -536,65 +513,83 @@ def train_hiv_steiner():
     # get labels of each entry for stratified shuffling and distribution of classes for class balance loss
     args.class_count, args.expected_loss, label_vec = count_classes_hiv(args.filepath, True, -1, 2)
 
-    # create indices for training and validation splits
-    #  -> a stratified cross-validation will be performed
-    dataset_size = len(data_all)
-    indices = np.arange(dataset_size)
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=args.seed)
+    # initialize con model
+    model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
+                 strides=args.strides, paddings=args.paddings, num_classes=2,
+                 kernel_args=[args.sigma, args.scale])
 
-    # perform stratified cross-validation
-    for fold, split_idx in enumerate(skf.split(indices, label_vec)):
-        # initialize con model
-        model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
-                     strides=args.strides, paddings=args.paddings, num_classes=2,
-                     kernel_args=[args.sigma, args.scale])
+    # set loss function and optimization algorithm
+    criterion = ClassBalanceLoss(args.class_count, 2, 'sigmoid', 0.99, 1.0)
+    optimizer = optim.Adam(model.parameters(), lr=0.1)
+    lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
-        # split dataset into training and validation samples
-        args.train_indices, args.val_indices = indices[split_idx[0]], indices[split_idx[1]]
+    loader = DataLoader(data_all, batch_size=args.batch_size)
 
-        # Creating PyTorch data samplers and loaders:
-        data_train = Subset(data_all, args.train_indices)
-        data_val = Subset(data_all, args.val_indices)
+    # train model
+    acc, loss = model.sup_train(loader, criterion, optimizer, lr_scheduler, epochs=args.nb_epochs,
+                                early_stop=False, use_cuda=args.use_cuda)
+    torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss},
+               args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_all.pkl")
 
-        loader_train = DataLoader(data_train, batch_size=args.batch_size)
-        loader_val = DataLoader(data_val, batch_size=args.batch_size)
-
-        # set loss function and optimization algorithm
-        criterion = ClassBalanceLoss(args.class_count, 2, 'sigmoid', 0.99, 1.0)
-        optimizer = optim.Adam(model.parameters(), lr=0.1)
-        lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
-
-        # train model
-        acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, epochs=args.nb_epochs,
-                                    early_stop=False, use_cuda=args.use_cuda)
-
-        # access performance on validation set
-        pred_y, true_y = model.predict(loader_val, proba=True)
-        scores = compute_metrics(true_y, pred_y)
-
-        # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
-        # model
-        torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss,
-                    'val_performance': scores.to_dict()},
-                   args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_fold" + str(fold) + ".pkl")
-
-        try:
-            # try to import pyplot
-            import matplotlib.pyplot as plt
-
-            # show the position of the anchor points as a histogram
-            anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
-            anchor = anchor.detach().numpy()
-            fig = plt.figure()
-            plt.hist(anchor, bins=ref_pos.size(1))
-            plt.xlabel('Position')
-            plt.ylabel('# Anchor Points')
-            plt.title('Distribution of anchor points')
-            # plt.show()
-            plt.savefig(args.outdir + "/anchor_positions_fold" + str(fold) + ".png")
-
-        except:
-            print("Cannot import matplotlib.pyplot")
+    # # create indices for training and validation splits
+    # #  -> a stratified cross-validation will be performed
+    # dataset_size = len(data_all)
+    # indices = np.arange(dataset_size)
+    # skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=args.seed)
+    #
+    # # perform stratified cross-validation
+    # for fold, split_idx in enumerate(skf.split(indices, label_vec)):
+    #     # initialize con model
+    #     model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
+    #                  strides=args.strides, paddings=args.paddings, num_classes=2,
+    #                  kernel_args=[args.sigma, args.scale])
+    #
+    #     # split dataset into training and validation samples
+    #     args.train_indices, args.val_indices = indices[split_idx[0]], indices[split_idx[1]]
+    #
+    #     # Creating PyTorch data samplers and loaders:
+    #     data_train = Subset(data_all, args.train_indices)
+    #     data_val = Subset(data_all, args.val_indices)
+    #
+    #     loader_train = DataLoader(data_train, batch_size=args.batch_size)
+    #     loader_val = DataLoader(data_val, batch_size=args.batch_size)
+    #
+    #     # set loss function and optimization algorithm
+    #     criterion = ClassBalanceLoss(args.class_count, 2, 'sigmoid', 0.99, 1.0)
+    #     optimizer = optim.Adam(model.parameters(), lr=0.1)
+    #     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
+    #
+    #     # train model
+    #     acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, epochs=args.nb_epochs,
+    #                                 early_stop=False, use_cuda=args.use_cuda)
+    #
+    #     # access performance on validation set
+    #     pred_y, true_y = model.predict(loader_val, proba=True)
+    #     scores = compute_metrics(true_y, pred_y)
+    #
+    #     # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+    #     # model
+    #     torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss,
+    #                 'val_performance': scores.to_dict()},
+    #                args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_fold" + str(fold) + ".pkl")
+    #
+    #     try:
+    #         # try to import pyplot
+    #         import matplotlib.pyplot as plt
+    #
+    #         # show the position of the anchor points as a histogram
+    #         anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
+    #         anchor = anchor.detach().numpy()
+    #         fig = plt.figure()
+    #         plt.hist(anchor, bins=ref_pos.size(1))
+    #         plt.xlabel('Position')
+    #         plt.ylabel('# Anchor Points')
+    #         plt.title('Distribution of anchor points')
+    #         # plt.show()
+    #         plt.savefig(args.outdir + "/anchor_positions_fold" + str(fold) + ".png")
+    #
+    #     except:
+    #         print("Cannot import matplotlib.pyplot")
 
 
 def train_encode():
@@ -650,6 +645,12 @@ def train_encode():
 
     # iterate over all ids used in this trainings round
     for tfid in train_ids:
+        # set random seeds
+        torch.manual_seed(args.seed)
+        if args.use_cuda:
+            torch.cuda.manual_seed(args.seed)
+        np.random.seed(args.seed)
+
         # update the dataset to the correct transcription factor
         data_all.update_dataset(tfid)
 
@@ -680,8 +681,13 @@ def train_encode():
         data_train = Subset(data_all, args.train_indices)
         data_val = Subset(data_all, args.val_indices)
 
-        loader_train = DataLoader(data_train, batch_size=args.batch_size)
-        loader_val = DataLoader(data_val, batch_size=args.batch_size)
+        # set arguments for the DataLoader
+        loader_args = {}
+        if args.use_cuda:
+            loader_args = {'num_workers': 1, 'pin_memory': True}
+
+        loader_train = DataLoader(data_train, batch_size=args.batch_size, shuffle=False, **loader_args)
+        loader_val = DataLoader(data_val, batch_size=args.batch_size, shuffle=False, **loader_args)
 
         # get distribution of classes for class balance loss
         args.class_count, args.expected_loss = count_classes_encode(data_all.labels, True)
@@ -693,7 +699,7 @@ def train_encode():
 
         # train model
         acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
-                                    epochs=args.nb_epochs, use_cuda=args.use_cuda)
+                                    epochs=args.nb_epochs)
 
         # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
         # model

@@ -364,7 +364,7 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
         plt.close(fig)
 
 
-def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, viz=True):
+def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, num_best, viz=True):
     """Construction of the anchor weight matrix
 
     This function converts the learned anchors into a 2d matrix where each row represents one k-mer and each column
@@ -381,6 +381,8 @@ def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, viz=True):
             :type kmer_dict: Dictionary
         :param sigma: sigma value used for the trained model
             type sigma: Float
+        :param num_best: Indicates how many of the most informative oligomers and positions should be showed
+            :type num_best: Integer
         :param viz: Indicates whether the matrix should be visualized using matplotlib
             :type viz: Boolean
 
@@ -418,21 +420,147 @@ def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, viz=True):
     below_threshold = image_matrix < 0.1
     image_matrix[below_threshold] = 0
 
+    # get row and column norm for ranking of oligomers and positions respectivly
+    norm_oligomers = np.linalg.norm(image_matrix, axis=1)
+    norm_positions = np.linalg.norm(image_matrix, axis=0)
+
+    # sort oligomers and positions according to their norm
+    idx_oliSort = np.flip(np.argsort(norm_oligomers)[-num_best:])
+    idx_posSort = np.flip(np.argsort(norm_positions)[-num_best:])
+
     if viz:
 
         # import matplotlib to plot the matrix
         import matplotlib.pyplot as plt
 
-        fig = plt.figure()
-        plt.imshow(image_matrix, cmap='Purples', interpolation=None, aspect='auto')
-        plt.colorbar()
-        plt.xlabel('Position')
-        plt.xticks(np.arange(0, kmer_ref.size(1), 5))
-        plt.yticks(np.arange(len(list(kmer_dict.keys()))), list(kmer_dict.keys()))
-        plt.title('k-mer weight functions')
+        fig, axs = plt.subplots(3)
+        im = axs[0].imshow(image_matrix, interpolation=None, aspect='auto')
+        fig.colorbar(im, ax=axs[0])
+        axs[0].set_xlabel('Position')
+        axs[0].set_xticks(np.arange(0, kmer_ref.size(1), 5))
+        axs[0].set_yticks(np.arange(len(list(kmer_dict.keys()))))
+        axs[0].set_yticklabels(list(kmer_dict.keys()))
+        axs[0].set_title('k-mer weight functions')
+        axs[1].bar(np.arange(num_best), norm_oligomers[idx_oliSort], 0.35)
+        axs[1].set_xlabel('Oligomers')
+        axs[1].set_ylabel('l2-Norm')
+        axs[1].set_xticks(np.arange(num_best))
+        axs[1].set_xticklabels([list(kmer_dict.keys())[i] for i in idx_oliSort])
+        axs[1].set_title('Oligomer Ranking')
+        axs[2].bar(np.arange(num_best), norm_positions[idx_posSort], 0.35)
+        axs[2].set_xlabel('Positions')
+        axs[2].set_ylabel('l2-Norm')
+        axs[2].set_xticks(np.arange(num_best))
+        axs[2].set_xticklabels([str(i) for i in idx_posSort])
+        axs[2].set_title('Position Ranking')
         plt.show()
 
-    return image_matrix
+    return image_matrix, (norm_oligomers, idx_oliSort), (norm_positions, idx_posSort)
+
+
+def model_interpretation(anchors, kmer_ref, kmer_dict, sigma, num_best, viz=True):
+    """Visual interpretation of the learned model
+
+    This function converts the learned anchors into a 2d matrix where each row represents one k-mer and each column
+    represents a sequence position. This matrix can be visualized to get an image comparable to Figure 2 in
+    Meinicke et al., 2004. Furthermore, oligomers and positions will be ranked based on their importance
+
+    - **Parameters**::
+
+        :param anchors: List of learned anchor positions
+            :type anchors: List of Floats
+        :param kmer_ref: Reference sequence of the trained model
+            :type kmer_ref: Tensor (num_k-mers x len_seq)
+        :param kmer_dict: Dictionary mapping each k-mer to an index
+            :type kmer_dict: Dictionary
+        :param sigma: sigma value used for the trained model
+            type sigma: Float
+        :param num_best: Indicates how many of the most informative oligomers and positions should be showed
+            :type num_best: Integer
+        :param viz: Indicates whether the matrix should be visualized using matplotlib
+            :type viz: Boolean
+
+    - **Returns**::
+
+        :returns: Matrix
+            :rtype: 2d NumPy array
+    """
+    # import section
+    from scipy.ndimage import gaussian_filter1d
+
+    # initialize output and anchor weight matrix
+    image_matrix = np.zeros(kmer_ref.shape)
+    anchor_weight = np.zeros(kmer_ref.shape[1])
+
+    # calculate the weights imposed by the anchors at each position
+    for anchor in anchors:
+        # get positions that are affected by the current anchor
+        weight1, pos1 = math.modf(anchor)
+        pos1 = int(pos1)
+        pos2 = pos1 + 1
+        weight2 = 1 - weight1
+
+        # update anchor weights
+        anchor_weight[pos1] += weight1
+        anchor_weight[pos2] += weight2
+
+    # iterate over all oligomers to calculate the weighted oligo functions
+    for i in range(image_matrix.shape[0]):
+        # get all position where the current oligomer is present in the reference sequence
+        oligo_pos = torch.nonzero(kmer_ref[i, :]).numpy()
+        oligo_pos_weights = kmer_ref[i, oligo_pos].numpy()
+
+        # iterate over all sequence positions to calculate oligo function at each position
+        for j in range(image_matrix.shape[1]):
+            image_matrix[i, j] = anchor_weight[j] * np.sum(np.exp(-(1 / (2 * sigma**2)) * (oligo_pos - j)**2) *
+                                                           oligo_pos_weights)
+
+    # apply a Gaussian filter to incorporate the oligo kernel information
+    image_matrix = gaussian_filter1d(image_matrix, sigma=sigma, mode='constant')
+
+    # scale matrix between 0 and 1
+    image_matrix /= image_matrix.max()
+
+    # reduce noise in the matrix
+    below_threshold = image_matrix < 0.1
+    image_matrix[below_threshold] = 0
+
+    # get row and column norm for ranking of oligomers and positions respectivly
+    norm_oligomers = np.linalg.norm(image_matrix, axis=1)
+    norm_positions = np.linalg.norm(image_matrix, axis=0)
+
+    # sort oligomers and positions according to their norm
+    idx_oliSort = np.flip(np.argsort(norm_oligomers)[-num_best:])
+    idx_posSort = np.flip(np.argsort(norm_positions)[-num_best:])
+
+    if viz:
+
+        # import matplotlib to plot the matrix
+        import matplotlib.pyplot as plt
+
+        fig, axs = plt.subplots(3)
+        im = axs[0].imshow(image_matrix, interpolation=None, aspect='auto')
+        fig.colorbar(im, ax=axs[0])
+        axs[0].set_xlabel('Position')
+        axs[0].set_xticks(np.arange(0, kmer_ref.size(1), 5))
+        axs[0].set_yticks(np.arange(len(list(kmer_dict.keys()))))
+        axs[0].set_yticklabels(list(kmer_dict.keys()))
+        axs[0].set_title('k-mer weight functions')
+        axs[1].bar(np.arange(num_best), norm_oligomers[idx_oliSort], 0.35)
+        axs[1].set_xlabel('Oligomers')
+        axs[1].set_ylabel('l2-Norm')
+        axs[1].set_xticks(np.arange(num_best))
+        axs[1].set_xticklabels([list(kmer_dict.keys())[i] for i in idx_oliSort])
+        axs[1].set_title('Oligomer Ranking')
+        axs[2].bar(np.arange(num_best), norm_positions[idx_posSort], 0.35)
+        axs[2].set_xlabel('Positions')
+        axs[2].set_ylabel('l2-Norm')
+        axs[2].set_xticks(np.arange(num_best))
+        axs[2].set_xticklabels([str(i) for i in idx_posSort])
+        axs[2].set_title('Position Ranking')
+        plt.show()
+
+    return image_matrix, (norm_oligomers, idx_oliSort), (norm_positions, idx_posSort)
 
 
 def category_from_output(output):
