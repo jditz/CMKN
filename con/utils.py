@@ -102,6 +102,108 @@ def kmer2dict(kmer_size, alphabet):
     return kmer_dict
 
 
+def oli2number(seq, kmer_dict, kmer_size, blank):
+    """Utility to translate a string into an integer tensor
+
+    This function takes a sequence represented by a string and returns an tensor, where each oligomer starting in the
+    sequence is encoded by a 2-dimensional vector at the corresponding position
+
+    - **Parameters**::
+
+        :param seq: Input sequences which is used to generate list of k-mer positions.
+            :type seq: string
+        :param kmer_dict: Dictionary mapping each possible k-mer to an integer.
+            :type kmer_dict: dictionary
+        :param kmer_size: Size of the k-meres.
+            :type kmer_size: integer
+        :param blank: character matching any character of the used alphabet
+            :type blank: character
+
+    - **Returns**::
+
+        :return positions: Tensor encoding oligomers starting at each position of seq.
+            :rtype positions: Tensor (2 x len(seq))
+
+    - **Raises**::
+
+        :raise ValueError: If one of the sequences was not build using the specified alphabet.
+    """
+
+    # initialize tensor to hold the oligomer encoding
+    oli_tensor = torch.zeros((2, len(seq)))
+
+    # add blank character to the end of the sequence
+    seq = seq + blank * kmer_size
+
+    # iterate through all oligomers of length kmer_size
+    for i in range(len(seq)):
+
+        # check if current k-mere is part of the dictionary and raise exception if  not
+        #   -> if k-mere is not part of the dictionary, the sequence is not created using the specified
+        #      alphabet
+        if seq[i:i+kmer_size] not in kmer_dict:
+            raise ValueError('Substring \'' + seq[i:i+kmer_size] + '\' not found in k-mere dictionary!\n' +
+                             '            The sequence ' +
+                             '\'{}\' was NOT build using the specified alphabet.'.format(seq))
+
+        # update tensor with the number of the starting oligomer
+        oli_tensor[0, i] = np.cos((kmer_dict.get(seq[i:i+kmer_size]) / len(kmer_dict)) * np.pi)
+        oli_tensor[1, i] = np.sin((kmer_dict.get(seq[i:i+kmer_size]) / len(kmer_dict)) * np.pi)
+
+    return oli_tensor
+
+
+def create_consensus(sequences, extension=None, ambi='DNA'):
+    """Build consensus sequence
+
+    This utility function takes sequences, either stored in a file readable by Biopython or in a list, and creates a
+    consensus sequence.
+    """
+
+    # select the correct ambiguous character
+    if ambi == 'DNA':
+        ambi = 'N'
+    elif ambi == 'AA':
+        ambi = 'X'
+    else:
+        raise ValueError('Error in create_consensus: Please set ambi to either DNA or AA.')
+
+    # if sequences is a string, we have to deal with a file
+    if isinstance(sequences, str):
+
+        # check if extension is set properly
+        if extension is None:
+            raise ValueError('Error in create_consensus: Please specify a valid file format. ' +
+                             'Currently, only fasta is tested.')
+
+        # import the Biopython routines to create a consensus sequence
+        from Bio import AlignIO
+        from Bio.Align import AlignInfo
+
+        # read in all sequences and create consensus sequence
+        alignment = AlignIO.read(sequences, extension)
+        summary_align = AlignInfo.SummaryInfo(alignment)
+        consensus = summary_align.dumb_consensus(threshold=0.5, ambiguous=ambi)
+
+    else:
+
+        # import the needed Biopython routines
+        from Bio.Align import MultipleSeqAlignment, AlignInfo
+
+        # create multiple alignment object
+        alignment = MultipleSeqAlignment([])
+
+        # iterate over list of sequences and add each sequence to the alignment
+        for seq in sequences:
+            alignment.add_sequence('aux', seq)
+
+        # create consensus sequence
+        summary_align = AlignInfo.SummaryInfo(alignment)
+        consensus = summary_align.dumb_consensus(threshold=0.5, ambiguous=ambi)
+
+    return consensus
+
+
 def build_kmer_ref_from_file(filepath, extension, kmer_dict, kmer_size):
     """Utility to create reference k-mere positions
 
