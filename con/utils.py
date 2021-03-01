@@ -102,8 +102,8 @@ def kmer2dict(kmer_size, alphabet):
     return kmer_dict
 
 
-def oli2number(seq, kmer_dict, kmer_size, blank):
-    """Utility to translate a string into an integer tensor
+def oli2number(seq, kmer_dict, kmer_size, ambi='DNA'):
+    """Utility to translate a string into a tensor
 
     This function takes a sequence represented by a string and returns an tensor, where each oligomer starting in the
     sequence is encoded by a 2-dimensional vector at the corresponding position
@@ -116,8 +116,8 @@ def oli2number(seq, kmer_dict, kmer_size, blank):
             :type kmer_dict: dictionary
         :param kmer_size: Size of the k-meres.
             :type kmer_size: integer
-        :param blank: character matching any character of the used alphabet
-            :type blank: character
+        :param ambi: String indicating the alphabet from which the ambiguous character should be chosen
+            :type ambi: string
 
     - **Returns**::
 
@@ -129,14 +129,25 @@ def oli2number(seq, kmer_dict, kmer_size, blank):
         :raise ValueError: If one of the sequences was not build using the specified alphabet.
     """
 
+    # select the correct ambiguous character
+    if ambi == 'DNA':
+        ambi = 'N'
+    elif ambi == 'AA':
+        ambi = 'X'
+    else:
+        raise ValueError('Error in create_consensus: Please set ambi to either DNA or AA.')
+
+    # store the length of the sequence
+    seq_len = len(seq)
+
     # initialize tensor to hold the oligomer encoding
-    oli_tensor = torch.zeros((2, len(seq)))
+    oli_tensor = torch.zeros((2, seq_len))
 
     # add blank character to the end of the sequence
-    seq = seq + blank * kmer_size
+    seq = seq + ambi * kmer_size
 
     # iterate through all oligomers of length kmer_size
-    for i in range(len(seq)):
+    for i in range(seq_len):
 
         # check if current k-mere is part of the dictionary and raise exception if  not
         #   -> if k-mere is not part of the dictionary, the sequence is not created using the specified
@@ -775,13 +786,39 @@ def add_exp(x, alpha):
     return 0.5 * (exp_func2(x, alpha) + x)
 
 
+def exp_oli(x, y, sigma=1, scale=1, alpha=10000):
+    """Exponential activation function for the oligo layer
+
+    This helper function implements the exponential activation function used in the oligo layer kernel function
+    formulation.
+
+    - **Parameters**::
+
+        :param x: Input (convolution of input position with anchor points) to the oligo kernel function.
+            :type x: Tensor
+        :param y: Input (convolution of oligomer encoding tensors) to the oligo kernel function
+        :param sigma: Degree of positional uncertainty.
+            :type sigma: Float
+        :param scale: Scaling parameter to accommodate for the oligo kernel network formulation.
+            :type scale: Float
+        :param alpha: Parameter to switch off unwanted position pairings
+            :type alpha: Float
+
+    - **Returns**::
+
+        :returns same shape tensor as x
+    """
+    return torch.exp((alpha**2 * (y-1.)) + (scale/(2*sigma**2) * (x-1.)))
+
+
 # dictionary for easy mapping of kernel functions
 #   - if one wants to implement new kernel functions write the function definition directly above this dictionary
 #     and add an entry to the dictionary
 kernels = {
     "exp": exp_func,
     "exp_chen": exp_func2,
-    "add_exp_chen": add_exp
+    "add_exp_chen": add_exp,
+    "exp_oli": exp_oli
 }
 
 

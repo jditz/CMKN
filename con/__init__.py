@@ -14,14 +14,14 @@ from .model import CON, CON2
 from .utils import (
     find_kmer_positions, kmer2dict, anchors_to_motivs, category_from_output, build_kmer_ref_from_file,
     build_kmer_ref_from_list, compute_metrics, register_hooks, plot_grad_flow, Hook, ClassBalanceLoss,
-    anchor_weight_matrix, model_interpretation
+    anchor_weight_matrix, model_interpretation, create_consensus, oli2number
 )
 from .data_utils import CONDataset
 
 MODEL = ['CON', 'CON2', 'CONDataset', 'ClassBalanceLoss']
 UTIL = ['find_kmer_positions', 'kmer2dict', 'build_kmer_ref_from_file', 'build_kmer_ref_from_list',
         'category_from_output', 'compute_metrics', 'anchors_to_motivs', 'anchor_weight_matrix',
-        'model_interpretation']
+        'model_interpretation', 'create_consensus', 'oli2number']
 DEBUG = ['register_hooks', 'plot_grad_flow', 'Hook']
 
 __all__ = MODEL + UTIL + DEBUG
