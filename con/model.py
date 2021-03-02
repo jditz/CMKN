@@ -14,7 +14,7 @@ import numpy as np
 from timeit import default_timer as timer
 import copy
 
-from .layers import POOLINGS, CONLayer, CKNLayer, LinearMax
+from .layers import POOLINGS, CONLayer, CKNLayer, LinearMax, CONLayerOld
 from .utils import category_from_output, ClassBalanceLoss
 
 
@@ -228,7 +228,7 @@ class CONSequential(nn.Module):
             module.normalize_()
 
 
-class CON(nn.Module):
+class CONOld(nn.Module):
     """Convolutional Oligo Kernel Network
 
     This implementation of a convolutional oligo kernel network combines a convolutional oligo kernel layer with CKN
@@ -707,6 +707,147 @@ class CON(nn.Module):
         return self
 
 
+class CON(nn.Module):
+    """Convolutional Oligo Kernel Network
+    """
+
+    def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
+                 kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batch_norm=True, dropout=False,
+                 pool_global='sum', pool_conv='mean', penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
+        """Constructor of the CON class.
+
+        - **Parameters**::
+
+            :param out_channels_list: Number of output channels of each layer
+                :type out_channels_list: List of Integer
+            :param ref_kmerPos: Distribution of k-mers in the reference sequence. Used for the evaluation of phi(.)
+                                for the anchor points
+                :type ref_kmerPos: Tensor (number of kmers x length of sequence)
+            :param filter_sizes: Size of the filter for each layer
+                :type filter_sizes: List of Integer
+            :param strides: List of stride factors for each pooling layer
+                :type strides: List of Integer
+            :param paddings: List of padding factors for each convolutional layer
+                :type paddings: List of String
+            :param kernel_funcs: Specifies the kernel function used in the CON layers
+                :type kernel_funcs: String (Default: None)
+            :param kernel_args_list: List of arguments for the used kernel.
+                :type kernel_args_list: List (Default: None)
+            :param kernel_args_trainable: List that indicates for each layer if the kernel parameters used in
+                                          this layer are trainable.
+                :type kernel_args_trainable: List of Boolean (Default: None)
+            :param alpha: Parameter of the classification layer
+                :type alpha: Float
+            :param fit_bias: Indicates whether the bias of the classification layer should be fitted
+                :type fit_bias: Boolean (Default: True)
+            :param batchNorm: Indicates whether batch normalization should be used for convolutional layers.
+                :type batchNorm: Boolean (Default: True)
+            :param dropout: Indicates whether Dropout should be used for convolutional layers.
+                :type dropout: Boolean (Default: False)
+            :param pool_conv: Indicates the pooling layer used after each convolutional layer
+                :type pool_conv: String (Default: 'mean')
+            :param global_pool: Indicates which method should be used for global pooling
+                :type global_pool: String (Default: 'sum')
+            :param penalty: Indicates which penalty method should be used
+                :type penalty: String (Default: 'l2')
+            :param scaler: Specifies which scaler will be used
+                :type scaler: String
+            :param num_classes: Number of classes in the current classification problem
+                :type num_classes: Integer
+
+        - **Exceptions**::
+
+            :raise ValueError if out_channels_list, filter_sizes, and subsamplings are not of the same length.
+        """
+
+        # check if out_channels_list, strides, filter_sizes, and paddings have an acceptable length
+        #   -> therefore, raise an AssertionError if the lengths differ
+        if not len(out_channels_list) == len(strides) == len(filter_sizes) + 1 == len(paddings) + 1:
+            raise ValueError('Incompatible dimensions! \n'
+                             '            out_channels_list and strides have to be of same length while filter_sizes '
+                             'and paddings have to be one entry shorter than the other two.')
+
+        # initialize parent class
+        super(CON, self).__init__()
+
+        # auxiliary variable to map the pooling choice onto a valid PyTorch layer
+        poolings = {'mean': nn.AvgPool1d, 'max': nn.MaxPool1d, 'lpp': nn.LPPool1d, 'adaMax': nn.AdaptiveMaxPool1d,
+                    'adaMean': nn.AdaptiveAvgPool1d}
+
+        # store the length of sequences used as input to this network
+        self.seq_len = ref_kmerPos.size(1)
+        self.num_classes = num_classes
+
+        # set the default kernel function if none was specified
+        if kernel_func is None:
+            kernel_func = "exp_oli"
+
+        # set the default kernel hyper-parameters (e.g. sigma) if none were specified
+        if kernel_args is None:
+            kernel_args = [1, 1, 10000]
+            kernel_args_trainable = False
+
+        # initialize the CON layer using all predefined parameters
+        self.oligo = CONLayerOld(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
+                                 kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
+
+        # initialize the additional "normal" convolutional layers if any should be used
+        self.nb_conv_layers = len(out_channels_list) - 1
+        if self.nb_conv_layers > 0:
+            convlayers = []
+            for i in range(1, len(out_channels_list)):
+
+                # set padding parameter dependent on the selected padding type
+                if paddings[i - 1] == "SAME":
+                    padding = (filter_sizes[i - 1] - 1) // 2
+                else:
+                    padding = 0
+
+                # initialize the "normal" convolutional layers
+                #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
+                convlayers.append(
+                    nn.Conv1d(out_channels_list[i - 1], out_channels_list[i], kernel_size=filter_sizes[i - 1],
+                              stride=1, padding=padding))
+
+                # perform batch normalization after each conv layer (if set to True)
+                if batch_norm:
+                    convlayers.append(nn.BatchNorm1d(out_channels_list[i]))
+
+                # use rectifiedLinearUnit as activation function
+                convlayers.append(nn.ReLU(inplace=True))
+
+                # use dropout after each conv layer (if set to True)
+                if dropout:
+                    convlayers.append(nn.Dropout())
+
+                # add max pooling
+                convlayers.append(poolings[pool_conv](kernel_size=filter_sizes[i - 1], stride=strides[i], padding=padding))
+
+            # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
+            self.conv = nn.Sequential(*convlayers)
+
+        # set the specified global pooling layer
+        self.global_pool = POOLINGS[pool_global]()
+
+        # set the number of output features
+        #   -> this is the number of output channels of the last CON layer
+        self.out_features = out_channels_list[-1]
+
+        # initialize the classification layer
+        self.initialize_scaler(scaler)
+        #self.classifier = nn.Linear(self.out_features, self.num_classes, fit_bias)
+        self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias,
+                                    penalty=penalty)
+
+    def initialize_scaler(self, scaler=None):
+        pass
+
+    def normalize_(self):
+        """ Function to normalize the weights of each layer of the convolutional oligo kernel network
+        """
+        self.oligo.normalize_()
+
+
 class CON2(nn.Module):
     """Convolutional Oligo Kernel Network
 
@@ -791,7 +932,7 @@ class CON2(nn.Module):
             kernel_args_trainable = False
 
         # initialize the CON layer using all predefined parameters
-        self.oligo = CONLayer(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
+        self.oligo = CONLayerOld(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
                               kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
 
         # initialize the additional "normal" convolutional layers

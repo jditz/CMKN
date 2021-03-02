@@ -10,7 +10,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-import math
 
 from scipy import optimize
 from sklearn.linear_model.base import LinearModel, LinearClassifierMixin
@@ -22,6 +21,287 @@ class CONLayer(nn.Conv1d):
     """ Convolutional Oligo Kernel Network Layer
 
     This class implements one layer of a convolutional Oligo Kernel Network (CON).
+    """
+    def __init__(self, out_channels, kmer_ref, dilation=1, groups=1, subsampling=1,
+                 kernel_func="exp_oli", kernel_args=[1, 1, 10000], kernel_args_trainable=False):
+        """Constructor of a CON layer
+
+        - **Parameters**::
+
+            :param out_channels: Number of output channels of the layer (this is equal to the number of anchor points)
+                :type out_channels: Integer
+            :param kmer_ref: This tensor holds the encoded reference sequence, i.e. the oligomer starting at each
+                             position of the reference sequence is encoded by a 2-dimensional vector
+                :type kmer_ref: Tensor (2 x |S|)
+            :param dilation: Controls the spacing between the kernel points; also known as the à trous algorithm
+                :type dilation: Integer (Default: 1)
+            :param groups: Controls the connections between inputs and outputs
+                :type groups: Integer (Default: 1)
+            :param subsampling: Controls the amount of subsampling in the current layer
+                :type subsampling: Integer (Default: 1)
+            :param kernel_func: Specified the kernel function that is used in the current layer
+                :type kernel_func: String (Default: "exp_oli")
+            :param kernel_args: All parameters of the kernel function. The parameters have to be given in the order
+                                [sigma, scale, alpha].
+                :type kernel_args: List (Default: [1, 1, 10000])
+            :param kernel_args_trainable: Specifies if the kernel arguments are trainable
+                :type kernel_args_trainable: Boolean
+        """
+        # set the number of input channels
+        #   -> this value is always 2 for the oligo kernel layer, therefore it is not a parameter that can be assigned
+        #      by the user
+        self.in_channels = 2
+
+        # set filter size and padding parameter for the underlying convolutional network architecture.
+        # For a convolutional oligo kernel layer, the filter size is always 1 and the padding parameter is always set to
+        # 0.
+        filter_size = 1
+        padding = 0
+
+        # initialize parent class
+        super(CONLayer, self).__init__(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
+                                       dilation=dilation, groups=groups, bias=False)
+
+        # initialize the Conv1D layer that handles the oligomer comparison term
+        self.alphanet = nn.Conv1d(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
+                                  dilation=dilation, groups=groups, bias=False)
+
+        # set parameters
+        self.subsampling = subsampling
+        self.filter_size = filter_size
+        self.patch_dim = self.in_channels * self.filter_size
+
+        # add the oligomer position encoding matrix for the reference sequence as a buffer to the model
+        self.kmer_ref = kmer_ref
+
+        # specify if the linear transformation factor will be calculated
+        self._need_lintrans_computed = True
+        self.register_buffer("lintrans", torch.Tensor(out_channels, out_channels))
+
+        # initialize the kernel function kappa
+        self.kernel_args_trainable = kernel_args_trainable
+        # make sure that the kernel arguments are given as a list
+        #   -> this is important for the call to the kernel function later
+        if isinstance(kernel_args, (int, float)):
+            kernel_args = [kernel_args]
+        self.kernel_args = kernel_args
+        # if the kernel parameters are trainable, initialize training of parameters here
+        if kernel_args_trainable:
+            self.kernel_args = nn.ParameterList([nn.Parameter(torch.Tensor([kernel_arg]))
+                                                 for kernel_arg in kernel_args])
+
+        # select the chosen kernel function from the dictionary that maps to all available functions
+        kernel_func = kernels[kernel_func]
+        # for convenient's sake, initialize a simple-to-use handler for the kernel function
+        self.kappa = lambda x, y: kernel_func(x, y, *self.kernel_args)
+
+        # set the kernel function used for computing the linear transformation factor
+        kernel_func_lintrans = kernels["exp"]
+        self.kappa_lintrans = lambda x: kernel_func_lintrans(x, *self.kernel_args[0:2])
+
+    def _initialize_weights(self):
+        """Initialization of CONLayer's weights and alphanet's weights
+
+        The anchor points of the CON layer will be equidistantly distributed over the whole length of the sequence.
+        Afterwards, alphanet's weights will be set to the corresponding oligomer encodings stored in self.kmer_ref.
+
+        - **Updates**::
+
+            self.weight (out_channels x in_channels): These represent the anchor points
+            self.alphanet.weight (out_channels x in_channels): These represent the encoded oligomer starting at the
+                                                               anchor points in the reference sequence
+        """
+        # determine the sequence length
+        seq_len = self.kmer_ref.shape[1]
+
+        # get anchor points that are equidistantly distributed over the whole sequence
+        dist = seq_len / self.out_channels
+        anchors = [round(dist / 2 + i * dist) for i in range(self.out_channels)]
+
+        # initialize weight tensor
+        weight = torch.zeros([self.out_channels, self.in_channels])
+
+        # fill the tensor by projecting anchor point positions onto the upper half of the unit circle
+        for i in range(self.out_channels):
+            # calculate the x coordinate
+            weight[i, 0] = np.cos((anchors[i] / seq_len) * np.pi)
+            weight[i, 1] = np.sin((anchors[i] / seq_len) * np.pi)
+
+        # make sure that the layer weights and the auxiliary weight variable have the same shape
+        weight = weight.view_as(self.weight)
+
+        # update the layer weight
+        self.weight.data = weight.data
+        self._need_lintrans_computed = True
+
+        # initialize alphanet weight tensor
+        weight_alphanet = torch.zeros([self.out_channels, self.in_channels])
+
+        # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
+        for i in anchors:
+            weight_alphanet[i, :] = self.kmer_ref[i, :]
+
+        # update alphanet's weights
+        self.alphanet.weight.data = weight_alphanet.data
+
+    def train(self, mode=True):
+        """ Toggle train mode
+
+        This function extends the train mode toggle functionality to CON layers.
+
+        - **Paramters**::
+
+            :param mode: Input that indicates whether the train mode should be enabled or disabled
+                :type mode: Boolean
+        """
+        super(CONLayer, self).train(mode)
+        if self.training is True:
+            self._need_lintrans_computed = True
+
+    def _compute_lintrans(self):
+        """Compute the linear transformation factor kappa(ZtZ)^(-1/2)
+
+        - **Returns**::
+
+            :return lintrans: Linear transformation factor
+                :rtype lintrans: tensor (out_channels x out_channels)
+        """
+        # return the current linear transformation factor, if no new factor needs to be computed
+        if not self._need_lintrans_computed:
+            return self.lintrans
+
+        lintrans = self.weight.view(self.out_channels, -1)
+        lintrans = lintrans.mm(lintrans.t())
+        lintrans = self.kappa_lintrans(lintrans)
+        lintrans = matrix_inverse_sqrt(lintrans)
+        if not self.training:
+            self._need_lintrans_computed = False
+            self.lintrans.data = lintrans.data
+
+        return lintrans
+
+    def _conv_layer(self, x_in, oli_in):
+        """Convolution layer
+
+        This layer computes the convolution: x_out = <phi(p), phi(Z)> * kappa(Zt p)
+
+        - **Parameters**::
+
+            :param x_in: 2-dimensional encoding of the input positions
+                :type x_in: Tensor (batch_size x in_channels x |S|)
+            :param oli_in: Oligomer encoding of the input sequence
+                :type oli_in: Tensor (batch_size x in_channels x |S|)
+
+        - **Returns**::
+
+            :return x_out: Result of the convolution
+                :rtype x_out: Tensor (batch_size x out_channels x |S|)
+        """
+        # calculate the convolution between input and anchor points
+        x_out = super(CONLayer, self).forward(x_in)
+
+        # calculate convolution between oligomer encoding of the input and oligomer encoding of the anchor points
+        oli_out = self.alphanet(oli_in)
+
+        # evaluate kernel function with the result
+        x_out = self.kappa(x_out, oli_out)
+        return x_out
+
+    def _mult_layer(self, x_in, lintrans):
+        """Multiplication layer
+
+        This layer multiplies the convolution output with the linear transformation factor:
+        x_out = kappa(ZtZ)^(-1/2) x x_in
+
+        - **Parameters**::
+
+            :param x_in: Result of the convolution
+                :type x_in: Tensor (batch_size x out_channels x |S|)
+            :param lintrans: Linear transformation factor
+                :type lintrans: Tensor (out_channels x out_channels)
+
+        - **Returns**:
+
+            :return x_out: Result of the multiplication
+                :rtype x_out: Tensor (batch_size x out_channels x |S|)
+        """
+        batch_size, out_c, _ = x_in.size()
+
+        # calculate normal matrix multiplication or batch matrix multiplication depending on whether input data is
+        # presented in batch mode
+        if x_in.dim() == 2:
+            return torch.mm(x_in, lintrans)
+        return torch.bmm(lintrans.expand(batch_size, out_c, out_c), x_in)
+
+    def forward(self, x_in, oli_in):
+        """Encode function for a CON layer
+
+        - **Parameters**::
+
+            :param x_in: 2-dimensional encoding of the input positions
+                :type x_in: Tensor (batch_size x in_channels x |S|)
+            :param oli_in: Oligomer encoding of the input sequence
+                :type oli_in: Tensor (batch_size x in_channels x |S|)
+        """
+        # perform the convolution
+        x_out = self._conv_layer(x_in, oli_in)
+
+        # calculate the linear transformation factor (if needed)
+        lintrans = self._compute_lintrans()
+
+        # multiply the convolution result by the linear transformation factor
+        x_out = self._mult_layer(x_out, lintrans)
+        return x_out
+
+    def normalize_(self):
+        """ Function to enforce the constraints on the anchor points and alphanet's weights. The kernel function is
+        valid iff all weights are normalized, point to discrete sequence positions, and the corresponding oligomers are
+        encoded by alphanet.weight.
+        """
+        # get the sequence length
+        seq_len = self.kmer_ref.shape[1]
+
+        # make sure all weights have unit l2-norm
+        norm = self.weight.data.view(
+            self.out_channels, -1).norm(p=2, dim=-1).view(-1, 1, 1)
+        norm.clamp_(min=EPS)
+        self.weight.data.div_(norm)
+
+        # transform weights into sequence positions
+        anchors = [round((np.acos(anchor[0].item()) / np.pi) * (seq_len - 1)) for anchor in self.weight]
+
+        # initialize weight tensor
+        weight = torch.zeros([self.out_channels, self.in_channels])
+
+        # fill the tensor by projecting anchor point positions onto the upper half of the unit circle
+        for i in range(self.out_channels):
+            # calculate the x coordinate
+            weight[i, 0] = np.cos((anchors[i] / seq_len) * np.pi)
+            weight[i, 1] = np.sin((anchors[i] / seq_len) * np.pi)
+
+        # make sure that the layer weights and the auxiliary weight variable have the same shape
+        weight = weight.view_as(self.weight)
+
+        # update the layer weight
+        self.weight.data = weight.data
+        self._need_lintrans_computed = True
+
+        # initialize alphanet weight tensor
+        weight_alphanet = torch.zeros([self.out_channels, self.in_channels])
+
+        # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
+        for i in anchors:
+            weight_alphanet[i, :] = self.kmer_ref[i, :]
+
+        # update alphanet's weights
+        self.alphanet.weight.data = weight_alphanet.data
+
+
+class CONLayerOld(nn.Conv1d):
+    """ Convolutional Oligo Kernel Network Layer
+
+    This class implements one layer of a convolutional Oligo Kernel Network (CON) using the old version of an oligo
+    kernel layer.
     """
     def __init__(self, out_channels, ref_kmerPos, dilation=1, groups=1, subsampling=1,
                  kernel_func="exp", kernel_args=[1, 1], kernel_args_trainable=False):
@@ -541,16 +821,17 @@ class GlobalSum1D(nn.Module):
 
     This class implements a global sum pooling layer for neural networks.
     """
-    def __init__(self):
+    def __init__(self, sigma):
         # initialize parent class
         super(GlobalSum1D, self).__init__()
+        self.sigma = sigma
 
     def forward(self, x, mask=None):
         if mask is None:
-            return x.sum(dim=-1)
+            return x.sum(dim=-1) * np.sqrt(np.pi)*self.sigma
         mask = mask.float().unsqueeze(1)
         x = x * mask
-        return x.sum(dim=-1)/mask.sum(dim=-1)
+        return x.sum(dim=-1)/mask.sum(dim=-1) * np.sqrt(np.pi)*self.sigma
 
 
 # define directory macro for simple access of pooling options
@@ -622,7 +903,7 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
                 self.bias.data.copy_(torch.from_numpy(w[:, -1]))
 
             # perform a classification with the given input
-            y_pred = self(x)
+            y_pred = self(x).view(-1)
 
             # calculate the loss
             #   -> differs between binary and multiclass
