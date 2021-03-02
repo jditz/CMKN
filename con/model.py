@@ -713,7 +713,7 @@ class CON(nn.Module):
 
     def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
                  kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batch_norm=True, dropout=False,
-                 pool_global='sum', pool_conv='mean', penalty='l2', scaler='standard_row', num_classes=1, **kwargs):
+                 pool_global='sum', pool_conv='mean', penalty='l2', scaler=None, num_classes=1, **kwargs):
         """Constructor of the CON class.
 
         - **Parameters**::
@@ -750,8 +750,9 @@ class CON(nn.Module):
                 :type global_pool: String (Default: 'sum')
             :param penalty: Indicates which penalty method should be used
                 :type penalty: String (Default: 'l2')
-            :param scaler: Specifies which scaler will be used
-                :type scaler: String
+            :param scaler: Specifies which scaler will be used, e.g. standard_row. Set to None if a fully connected
+                           layer should be used for classification
+                :type scaler: String (Default: None)
             :param num_classes: Number of classes in the current classification problem
                 :type num_classes: Integer
 
@@ -833,11 +834,13 @@ class CON(nn.Module):
         #   -> this is the number of output channels of the last CON layer
         self.out_features = out_channels_list[-1]
 
-        # initialize the classification layer
-        self.initialize_scaler(scaler)
-        #self.classifier = nn.Linear(self.out_features, self.num_classes, fit_bias)
-        self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias,
-                                    penalty=penalty)
+        # initialize the classification layer; use a standard fully connected layer if scaler is set to None
+        if scaler is None:
+            self.classifier = nn.Linear(self.out_features, self.num_classes, fit_bias)
+        else:
+            self.initialize_scaler(scaler)
+            self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias,
+                                        penalty=penalty)
 
     def initialize_scaler(self, scaler=None):
         pass
@@ -846,6 +849,158 @@ class CON(nn.Module):
         """ Function to normalize the weights of each layer of the convolutional oligo kernel network
         """
         self.oligo.normalize_()
+
+    def representation(self, input, oli, mask=None):
+        """ Function to combine CON layer and pooling layer evaluation
+
+        - **Parameters**::
+            :param input: Input to the model
+                :type input: Tensor (batch_size x 2 x |S|)
+            :param oli: Tensor encoding the oligomer starting at each position as a 2-dimensional vector
+                :type oli: Tensor (batch_size x 2 x |S|)
+            :param mask: Initial mask
+
+        - **Returns**::
+
+            :return: Evaluation of the CON layer(s) with subsequent pooling using the given input
+        """
+        output = self.oligo(input, oli)
+        if self.nb_conv_layers > 0:
+            output = self.conv(output)
+        output = self.global_pool(output, mask)
+        return output
+
+    def forward(self, input, oli, proba=False):
+        """ Overwritten forward function for CON objects
+
+        - **Parameters**::
+            :param input: Input to the model
+                :type input: Tensor (batch_size x 2 x |S|)
+            :param oli: Tensor encoding the oligomer starting at each position as a 2-dimensional vector
+                :type oli: Tensor (batch_size x 2 x |S|)
+            :param proba: Indicates whether the network should produce probabilistic output
+                :type proba: Boolean
+
+        - **Returns**::
+
+            :return: Evaluation of the input
+        """
+        output = self.representation(input, oli)
+        if isinstance(self.classifier, LinearMax):
+            return self.classifier(output, proba)
+        else:
+            output = self.classifier(output)
+            if proba:
+                # activate with sigmoid function only for binary classification
+                if self.num_classes == 2:
+                    return output.sigmoid()
+
+                # activate with softmax function for multi-class classification
+                else:
+                    return F.softmax(output, dim=1)
+            else:
+                return output
+
+    def unsup_train_classifier(self, data_loader, criterion=None, use_cuda=False):
+        """ This function initializes the classification layer in an unsupervised fashion
+
+        - **Parameters**::
+
+            :param data_loader: PyTorch DataLoader that handles data
+                :type data_loader: torch.utils.data.DataLoader
+            :param criterion: Specifies the loss function. If set to None, torch.nn.BCEWithLogitsLoss() will be used.
+                :type criterion: PyTorch Loss function (e.g. torch.nn.L1Loss)
+            :param use_cuda: Specified whether all computations will be performed on the GPU
+                :type use_cuda: Boolean
+        """
+        # perform an initial prediction using the network
+        encoded_train, encoded_target = self.predict(data_loader, True, use_cuda=use_cuda)
+
+        # check if a scaler was defined and not yet fitted
+        if hasattr(self, 'scaler') and not self.scaler.fitted:
+            self.scaler.fitted = True
+            size = encoded_train.shape[0]
+            # fit the scaler
+            encoded_train = self.scaler.fit_transform(encoded_train.view(-1, self.out_features)).view(size, -1)
+
+        # fit the classification layer with the initial prediction
+        self.classifier.fit(encoded_train, encoded_target, criterion)
+
+    def predict(self, data_loader, only_representation=False, proba=False, use_cuda=False):
+        """ CON prediction function
+
+        - **Parameters**::
+
+            :param data_loader: PyTorch DataLoader that handles data
+                :type data_loader: torch.utils.data.DataLoader
+            :param only_representation:
+                :type only_representation: Boolean
+            :param proba: Indicates whether the network should produce probabilistic output
+                :type proba: Boolean
+            :param use_cuda: Specified whether all computations will be performed on the GPU
+                :type use_cuda: Boolean
+
+        - **Returns**::
+
+            :return output:
+            :return target_output:
+        """
+        # set training mode of the model to False
+        self.train(False)
+
+        # move model either to CPU or GPU
+        if use_cuda:
+            self.cuda()
+
+        # detect the number of samples that will be classified and initialize tensor that stores the targets of each
+        # sample
+        n_samples = len(data_loader.dataset)
+
+        # iterate over all samples
+        batch_start = 0
+        for i, (oli_in, target, *_) in enumerate(data_loader):
+            oli_in.requires_grad = False
+            data = torch.zeros(oli_in.size(0), 2, oli_in.size(-1))
+            for j in range(oli_in.size(-1)):
+                # project current position on the upper half of the unit circle
+                x_circle = np.cos(((j + 1) / oli_in.size(-1)) * np.pi)
+                y_circle = np.sin(((j + 1) / oli_in.size(-1)) * np.pi)
+
+                # fill the input tensor
+                data[:, 0, j] = x_circle
+                data[:, 1, j] = y_circle
+
+            batch_size = data.shape[0]
+
+            # transfer sample data to GPU if computations are performed there
+            if use_cuda:
+                data = data.cuda()
+
+            # do not keep track of the gradients during the forward propagation
+            with torch.no_grad():
+                if only_representation:
+                    batch_out = self.representation(data, oli_in).data.cpu()
+                else:
+                    batch_out = self(data, oli_in, proba).data.cpu()
+
+            # combine the result of the forward propagation
+            #batch_out = torch.cat((batch_out[:batch_size], batch_out[batch_size:]), dim=-1)
+
+            # initialize tensor that holds the results of the forward propagation for each sample
+            if i == 0:
+                output = torch.Tensor(n_samples, batch_out.shape[-1])
+                target_output = torch.Tensor(n_samples, target.shape[-1])
+
+            # update output and target_output tensor with the current results
+            output[batch_start:batch_start + batch_size] = batch_out
+            target_output[batch_start:batch_start + batch_size] = target
+
+            # continue with the next batch
+            batch_start += batch_size
+
+        # return the forward propagation results and the real targets
+        output.squeeze_(-1)
+        return output, target_output
 
 
 class CON2(nn.Module):
