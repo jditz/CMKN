@@ -1002,6 +1002,228 @@ class CON(nn.Module):
         output.squeeze_(-1)
         return output, target_output
 
+    def initialize(self):
+        """ Function to initialize parameters of the network
+        """
+        # initialize the anchor points of the CON layer in an unsupervised fashion
+        print("Initializing layer 0 (oligo kernel layer)...")
+        self.oligo.initialize_weights()
+
+        # iterate over all convolutional layers
+        if self.nb_conv_layers > 0:
+            for i, layer in enumerate(self.conv):
+
+                # initialize the convolutional layer
+                if isinstance(layer, nn.Conv1d):
+                    print("Initializing layer {} (conv layer)...".format(i+1))
+
+                    # initializing weights using the He initialization (also called Kaiming initialization)
+                    #   -> only use this initialization if ReLU activation is used
+                    nn.init.kaiming_uniform_(layer.weight, mode='fan_in', nonlinearity='relu')
+
+    def sup_train(self, train_loader, criterion, optimizer, lr_scheduler=None, epochs=100, val_loader=None,
+                  use_cuda=False, early_stop=True):
+        """ Perform supervised training of the CON model
+
+        - **Parameters**::
+
+            :param train_loader: PyTorch DataLoader that handles data
+                :type train_loader: torch.utils.data.DataLoader
+            :param criterion: Specifies the loss function.
+                :type criterion: PyTorch Loss function (e.g. torch.nn.L1Loss)
+            :param optimizer: Optimization algorithm used during training
+                :type optimizer: PyTorch Optimizer (e.g. torch.optim.Adam)
+            :param lr_scheduler: Algorithm used for learning rate adjustment
+                :type lr_scheduler: PyTorch LR Scheduler (e.g. torch.optim.lr_scheduler.LambdaLR) (Default: None)
+            :param epochs: Number of epochs during training
+                :type epochs: Integer (Default: 100)
+            :param val_loader: PyTorch DataLoader that handles data during the validation phase
+                :type val_loader: torch.utils.data.DataLoader (Default: None)
+            :param use_cuda: Specified whether all computations will be performed on the GPU
+                :type use_cuda: Boolean (Default: False)
+            :param early_stop: Specifies if early stopping will be used during training
+                :type early_stop: Boolean (Default: True)
+
+        - **Returns**::
+
+            :return training and validation accuracies and losses of each epoch
+        """
+
+        print("Initializing CON layers")
+        tic = timer()
+
+        # initialize the anchor points of all layers that use anchor points in an unsupervised fashion and initialize
+        # weights of all convolutional layers
+        self.initialize()
+
+        toc = timer()
+        print("Finished, elapsed time: {:.2f}min\n".format((toc - tic) / 60))
+
+        # specify the data used for each phase
+        #   -> ATTENTION: a validation phase only exists if val_loader is not None
+        phases = ['train']
+        data_loader = {'train': train_loader}
+        if val_loader is not None:
+            phases.append('val')
+            data_loader['val'] = val_loader
+
+        # initialize variables to keep track of the epoch's loss, the best loss, and the best accuracy
+        epoch_loss = None
+        best_epoch = 0
+        best_loss = float('inf')
+        best_acc = 0
+
+        # iterate over all epochs
+        list_acc = {'train': [], 'val': []}
+        list_loss = {'train': [], 'val': []}
+        for epoch in range(epochs):
+            tic = timer()
+            print('Epoch {}/{}'.format(epoch + 1, epochs))
+            print('-' * 10)
+
+            # set the models train mode to False
+            self.train(False)
+
+            # for each epoch, calculate a new fit for the linear classifier using the current state of the model
+            # (do that iff classification layer is LinearMax)
+            if isinstance(self.classifier, LinearMax):
+                self.unsup_train_classifier(train_loader, criterion, use_cuda=use_cuda)
+
+            # iterate over all phases of the training process
+            for phase in phases:
+
+                # if the current phase is 'train', set model's train mode to True and initialize the Learning Rate
+                # Scheduler (if one was specified)
+                if phase == 'train':
+                    if lr_scheduler is not None:
+
+                        # if the learning rate scheduler is 'ReduceLROnPlateau' and there is a current loss, the next
+                        # lr step needs the current loss as input
+                        if isinstance(lr_scheduler, ReduceLROnPlateau):
+                            if epoch_loss is not None:
+                                lr_scheduler.step(epoch_loss)
+
+                        # otherwise call the step() function of the learning rate scheduler
+                        else:
+                            lr_scheduler.step()
+
+                        # print the current learning rate
+                        print("current LR: {}".format(optimizer.param_groups[0]['lr']))
+
+                    # set model's train mode to True
+                    self.train(True)
+
+                # if the current phase is not 'train', set the model's train mode to False. In this case, the learning
+                # rate is irrelevant.
+                else:
+                    self.train(False)
+
+                # initialize variables to keep track of the loss and the number of correctly classified samples in the
+                # current epoch
+                running_loss = 0.0
+                running_corrects = 0
+
+                # iterate over the data that will be used in the current phase
+                for oli, target, *_ in data_loader[phase]:
+                    # create input data
+                    data = torch.zeros(oli.size(0), 2, oli.size(-1))
+                    for i in range(oli.size(-1)):
+                        # project current position on the upper half of the unit circle
+                        x_circle = np.cos(((i + 1) / oli.size(-1)) * np.pi)
+                        y_circle = np.sin(((i + 1) / oli.size(-1)) * np.pi)
+
+                        # fill the input tensor
+                        data[:, 0, i] = x_circle
+                        data[:, 1, i] = y_circle
+
+                    size = data.size(0)
+                    oli.requires_grad = False
+                    target = target.float()
+
+                    # if the computations take place on the GPU, send data to GPU
+                    if use_cuda:
+                        data = data.cuda()
+                        oli = oli.cuda()
+                        target = target.cuda()
+
+                    # zero the parameter gradients
+                    optimizer.zero_grad()
+
+                    # forward propagation through the model
+                    #   -> do not keep track of the gradients if we are in the validation phase
+                    if phase == 'val':
+                        with torch.no_grad():
+                            output = self(data, oli)
+
+                            # create prediction tensor
+                            pred = torch.zeros(output.shape)
+                            for i in range(output.shape[0]):
+                                pred[i, category_from_output(output[i, :])] = 1
+
+                            # multiclass prediction needs special call of loss function
+                            if self.num_classes > 2 or isinstance(criterion, ClassBalanceLoss):
+                                loss = criterion(output, target.argmax(1))
+                            else:
+                                loss = criterion(output, target)
+                    else:
+                        output = self(data, oli)
+
+                        # create prediction tensor
+                        pred = torch.zeros(output.shape)
+                        for i in range(output.shape[0]):
+                            pred[i, category_from_output(output[i, :])] = 1
+
+                        # multiclass prediction needs special call of loss function
+                        if self.num_classes > 2 or isinstance(criterion, ClassBalanceLoss):
+                            loss = criterion(output, target.argmax(1))
+                        else:
+                            loss = criterion(output, target)
+
+                    # backward propagate + optimize only if in training phase
+                    if phase == 'train':
+                        loss.backward()
+                        #torch.nn.utils.clip_grad_norm_(self.oligo.parameters(), 0.5)
+                        optimizer.step()
+                        self.normalize_()
+
+                    # update statistics
+                    running_loss += loss.item() * size
+                    running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
+                                                  torch.ones(pred.shape[0]) * self.num_classes).item()
+
+                # calculate loss and accuracy in the current epoch
+                epoch_loss = running_loss / len(data_loader[phase].dataset)
+                epoch_acc = running_corrects / len(data_loader[phase].dataset)
+
+                # print the statistics of the current epoch
+                list_acc[phase].append(epoch_acc)
+                list_loss[phase].append(epoch_loss)
+                print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
+
+                # deep copy the model
+                if (phase == 'val') and epoch_loss < best_loss:
+                    best_epoch = epoch + 1
+                    best_acc = epoch_acc
+                    best_loss = epoch_loss
+
+                    # store model parameters only if the generalization error improved (i.e. early stopping)
+                    if early_stop:
+                        best_weights = copy.deepcopy(self.state_dict())
+
+            toc = timer()
+            print("Finished, elapsed time: {:.2f}min\n".format((toc - tic) / 60))
+
+        # report training results
+        print('Finish at epoch: {}'.format(epoch + 1))
+        print('Best epoch: {} with Acc = {:4f} and loss = {:4f}'.format(best_epoch, best_acc, best_loss))
+
+        # if early stopping is enabled, make sure that the parameters are used, which resulted in the best
+        # generalization error
+        if early_stop:
+            self.load_state_dict(best_weights)
+
+        return list_acc, list_loss
+
 
 class CON2(nn.Module):
     """Convolutional Oligo Kernel Network

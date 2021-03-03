@@ -99,7 +99,7 @@ class CONLayer(nn.Conv1d):
         kernel_func_lintrans = kernels["exp"]
         self.kappa_lintrans = lambda x: kernel_func_lintrans(x, *self.kernel_args[0:2])
 
-    def _initialize_weights(self):
+    def initialize_weights(self):
         """Initialization of CONLayer's weights and alphanet's weights
 
         The anchor points of the CON layer will be equidistantly distributed over the whole length of the sequence.
