@@ -736,7 +736,8 @@ class CON(nn.Module):
             :param kernel_args_trainable: List that indicates for each layer if the kernel parameters used in
                                           this layer are trainable.
                 :type kernel_args_trainable: List of Boolean (Default: None)
-            :param alpha: Parameter of the classification layer
+            :param alpha: Strength of the regularization in the classification layer (only used if the classification
+                          layer is a LinearMax layer)
                 :type alpha: Float
             :param fit_bias: Indicates whether the bias of the classification layer should be fitted
                 :type fit_bias: Boolean (Default: True)
@@ -748,7 +749,8 @@ class CON(nn.Module):
                 :type pool_conv: String (Default: 'mean')
             :param global_pool: Indicates which method should be used for global pooling
                 :type global_pool: String (Default: 'sum')
-            :param penalty: Indicates which penalty method should be used
+            :param penalty: Indicates which penalty method should be used for regularization in the classification layer
+                            (only used if the classfication layer is a LinearMax layer)
                 :type penalty: String (Default: 'l2')
             :param scaler: Specifies which scaler will be used, e.g. standard_row. Set to None if a fully connected
                            layer should be used for classification
@@ -789,8 +791,8 @@ class CON(nn.Module):
             kernel_args_trainable = False
 
         # initialize the CON layer using all predefined parameters
-        self.oligo = CONLayerOld(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
-                                 kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
+        self.oligo = CONLayer(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
+                              kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
 
         # initialize the additional "normal" convolutional layers if any should be used
         self.nb_conv_layers = len(out_channels_list) - 1
@@ -828,7 +830,10 @@ class CON(nn.Module):
             self.conv = nn.Sequential(*convlayers)
 
         # set the specified global pooling layer
-        self.global_pool = POOLINGS[pool_global]()
+        if pool_global == 'sum':
+            self.global_pool = POOLINGS[pool_global](kernel_args[0])
+        else:
+            self.global_pool = POOLINGS[pool_global]()
 
         # set the number of output features
         #   -> this is the number of output channels of the last CON layer
@@ -989,7 +994,7 @@ class CON(nn.Module):
             # initialize tensor that holds the results of the forward propagation for each sample
             if i == 0:
                 output = torch.Tensor(n_samples, batch_out.shape[-1])
-                target_output = torch.Tensor(n_samples, target.shape[-1])
+                target_output = torch.Tensor(n_samples, target.shape[-1]).type_as(target)
 
             # update output and target_output tensor with the current results
             output[batch_start:batch_start + batch_size] = batch_out

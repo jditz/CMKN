@@ -132,10 +132,10 @@ def oli2number(seq, kmer_dict, kmer_size, ambi='DNA'):
     # select the correct ambiguous character
     if ambi == 'DNA':
         ambi = 'N'
-    elif ambi == 'AA':
+    elif ambi == 'PROTEIN':
         ambi = 'X'
     else:
-        raise ValueError('Error in create_consensus: Please set ambi to either DNA or AA.')
+        raise ValueError('Error in create_consensus: Please set ambi to either DNA or PROTEIN.')
 
     # store the length of the sequence
     seq_len = len(seq)
@@ -174,10 +174,10 @@ def create_consensus(sequences, extension=None, ambi='DNA'):
     # select the correct ambiguous character
     if ambi == 'DNA':
         ambi = 'N'
-    elif ambi == 'AA':
+    elif ambi == 'PROTEIN':
         ambi = 'X'
     else:
-        raise ValueError('Error in create_consensus: Please set ambi to either DNA or AA.')
+        raise ValueError('Error in create_consensus: Please set ambi to either DNA or PROTEIN.')
 
     # if sequences is a string, we have to deal with a file
     if isinstance(sequences, str):
@@ -833,7 +833,7 @@ class ClassBalanceLoss(nn.Module):
     Reference: Yin Cui, Menglin Jia, Tsung-Yi Lin, Yang Song, Serge Belongie; Proceedings of the IEEE/CVF Conference on
                Computer Vision and Pattern Recognition (CVPR), 2019, pp. 9268-9277
     """
-    def __init__(self, samples_per_cls, no_of_classes, loss_type, beta, gamma):
+    def __init__(self, samples_per_cls, no_of_classes, loss_type, beta, gamma, reduction='mean'):
         """Constructor of the class-balance loss class
 
         - **Parameters**::
@@ -863,6 +863,7 @@ class ClassBalanceLoss(nn.Module):
         self.loss_type = loss_type
         self.beta = beta
         self.gamma = gamma
+        self.reduction = reduction
 
     def focal_loss(self, labels, logits, alpha):
         """Compute the focal loss between `logits` and the ground truth `labels`.
@@ -922,6 +923,11 @@ class ClassBalanceLoss(nn.Module):
 
         labels_one_hot = F.one_hot(labels, self.no_of_classes).float()
 
+        # we need to adapt the dimensionality of logits if the batch size is 1
+        #   -> otherwise logits and labels_one_hot have mismatching dimensionality
+        if labels_one_hot.shape[0] == 1:
+            logits = logits.view_as(labels_one_hot)
+
         weights_tensor = torch.tensor(weights).float()
         weights_tensor = weights_tensor.unsqueeze(0)
         weights_tensor = weights_tensor.repeat(labels_one_hot.shape[0], 1) * labels_one_hot
@@ -932,12 +938,15 @@ class ClassBalanceLoss(nn.Module):
         if self.loss_type == "focal":
             cb_loss = self.focal_loss(labels_one_hot, logits, weights_tensor)
         elif self.loss_type == "sigmoid":
-            cb_loss = F.binary_cross_entropy_with_logits(input=logits, target=labels_one_hot, weight=weights_tensor)
+            cb_loss = F.binary_cross_entropy_with_logits(input=logits, target=labels_one_hot, weight=weights_tensor,
+                                                         reduction=self.reduction)
         elif self.loss_type == "softmax":
             pred = logits.softmax(dim=1)
-            cb_loss = F.binary_cross_entropy(input=pred, target=labels_one_hot, weight=weights_tensor)
+            cb_loss = F.binary_cross_entropy(input=pred, target=labels_one_hot, weight=weights_tensor,
+                                             reduction=self.reduction)
         elif self.loss_type == "cross_entropy":
-            cb_loss = F.cross_entropy(input=logits, target=labels, weight=torch.tensor(weights).float())
+            cb_loss = F.cross_entropy(input=logits, target=labels, weight=torch.tensor(weights).float(),
+                                      reduction=self.reduction)
         else:
             raise ValueError("Undefined loss function: {}.".format(self.loss_type) +
                              "\n            Valid values are 'focal', 'sigmoid', 'softmax', and 'cross_entropy'.")

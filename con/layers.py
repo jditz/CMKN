@@ -14,7 +14,7 @@ import numpy as np
 from scipy import optimize
 from sklearn.linear_model.base import LinearModel, LinearClassifierMixin
 
-from .utils import kernels, gaussian_filter_1d, matrix_inverse_sqrt, spherical_kmeans, EPS, normalize_
+from .utils import kernels, gaussian_filter_1d, matrix_inverse_sqrt, spherical_kmeans, EPS, normalize_, ClassBalanceLoss
 
 
 class CONLayer(nn.Conv1d):
@@ -62,9 +62,12 @@ class CONLayer(nn.Conv1d):
         super(CONLayer, self).__init__(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
                                        dilation=dilation, groups=groups, bias=False)
 
-        # initialize the Conv1D layer that handles the oligomer comparison term
+        # initialize the Conv1D layer that handles the oligomer comparison term and freeze layer's parameters
+        #   -> weights will be updated by the constraints; no learning needed
         self.alphanet = nn.Conv1d(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
                                   dilation=dilation, groups=groups, bias=False)
+        for param in self.alphanet.parameters():
+            param.requires_grad = False
 
         # set parameters
         self.subsampling = subsampling
@@ -139,7 +142,10 @@ class CONLayer(nn.Conv1d):
 
         # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
         for i in anchors:
-            weight_alphanet[i, :] = self.kmer_ref[i, :]
+            weight_alphanet[i, :] = self.kmer_ref[:, i]
+
+        # make sure that the alphanet weights and the auxiliary weight variable have the same shape
+        weight_alphanet = weight_alphanet.view_as(self.alphanet.weight)
 
         # update alphanet's weights
         self.alphanet.weight.data = weight_alphanet.data
@@ -201,7 +207,7 @@ class CONLayer(nn.Conv1d):
         x_out = super(CONLayer, self).forward(x_in)
 
         # calculate convolution between oligomer encoding of the input and oligomer encoding of the anchor points
-        oli_out = self.alphanet(oli_in)
+        oli_out = self.alphanet.forward(oli_in)
 
         # evaluate kernel function with the result
         x_out = self.kappa(x_out, oli_out)
@@ -268,7 +274,7 @@ class CONLayer(nn.Conv1d):
         self.weight.data.div_(norm)
 
         # transform weights into sequence positions
-        anchors = [round((np.acos(anchor[0].item()) / np.pi) * (seq_len - 1)) for anchor in self.weight]
+        anchors = [round((np.arccos(anchor[0].item()) / np.pi) * (seq_len - 1)) for anchor in self.weight]
 
         # initialize weight tensor
         weight = torch.zeros([self.out_channels, self.in_channels])
@@ -291,7 +297,10 @@ class CONLayer(nn.Conv1d):
 
         # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
         for i in anchors:
-            weight_alphanet[i, :] = self.kmer_ref[i, :]
+            weight_alphanet[i, :] = self.kmer_ref[:, i]
+
+        # make sure that the alphanet weights and the auxiliary weight variable have the same shape
+        weight_alphanet = weight_alphanet.view_as(self.alphanet.weight)
 
         # update alphanet's weights
         self.alphanet.weight.data = weight_alphanet.data
@@ -339,7 +348,7 @@ class CONLayerOld(nn.Conv1d):
         padding = 0
 
         # initialize parent class
-        super(CONLayer, self).__init__(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
+        super(CONLayerOld, self).__init__(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
                                        dilation=dilation, groups=groups, bias=False)
 
         # set parameters
@@ -867,8 +876,8 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
         # initialize the loss function
         if criterion is None:
             criterion = nn.BCEWithLogitsLoss()
-        criterion.reduction = 'sum'
         reduction = criterion.reduction
+        criterion.reduction = 'sum'
 
         # make sure that input is given as Tensors
         if isinstance(x, np.ndarray) or isinstance(y, np.ndarray):
@@ -907,7 +916,9 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
 
             # calculate the loss
             #   -> differs between binary and multiclass
-            if self.num_classes > 2:
+            #   -> ClassBalanceLoss needs to be handled the same way as multiclass even if only binary classification
+            #      is performed
+            if self.num_classes > 2 or isinstance(criterion, ClassBalanceLoss):
                 loss = criterion(y_pred, y.argmax(1))
             else:
                 loss = criterion(y_pred, y)

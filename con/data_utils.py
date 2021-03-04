@@ -17,7 +17,7 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch.utils import data
 
-from .utils import kmer2dict, find_kmer_positions
+from .utils import kmer2dict, find_kmer_positions, oli2number
 
 if sys.version_info < (3,):
     import string
@@ -172,7 +172,8 @@ class CONDataset(data.Dataset):
     This class extension is only tested with fasta files. Extensions for further file formats might be implemented in
     the future.
     """
-    def __init__(self, filepath, ext="fasta", kmer_size=3, alphabet="DNA_FULL", clean_set=None, tfid=None):
+    def __init__(self, filepath, ext="fasta", kmer_size=3, alphabet="DNA_FULL", clean_set=None, tfid=None,
+                 encode='continuous'):
         """ Custom Dataset Constructor
 
         - **Parameters**::
@@ -188,6 +189,8 @@ class CONDataset(data.Dataset):
                                  value that indicates an invalid entry)
             :param tfid: ID of the used transcription factor.
                 :type tfid: String
+            :param encode: Specifies how to encode the oligomer information of samples
+                :type encode: String
         """
 
         # call constructor of parent class
@@ -245,6 +248,14 @@ class CONDataset(data.Dataset):
         else:
             raise ValueError('Unknown file extension: {}'.format(ext))
 
+        # create easy-to-use handle for the sequence encoding
+        if encode == 'continuous':
+            self.encode_function = lambda x: self._encode_continuous(x)
+        elif encode == 'onehot':
+            self.encode_function = lambda x: self._encode_onehot(x)
+        else:
+            raise ValueError('Unknown encoding option: {}'.format(encode))
+
         # create dictionary that maps each string of length kmer_size that can be build using alphabet to an integer
         self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[self.alphabet][0])
 
@@ -267,6 +278,19 @@ class CONDataset(data.Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
+        return self.encode_function(idx)
+
+    def _encode_onehot(self, idx):
+        """This function encodes oligomer starting information of each extracted sample as a one-hot encoding vector
+
+        - **Parameters**::
+
+            :param idx: Index or set of indices of the sample(s) that will be retrieved
+
+        - **Returns**::
+
+            :return: Sample(s) from the input data
+        """
         # perform different sample extraction depending on whether a list of indices is given or not
         try:
             # initialize data tensor
@@ -323,6 +347,70 @@ class CONDataset(data.Dataset):
                 # for each kmer, iterate over all occurrences and update data tensor, accordingly
                 for pos in positions[j]:
                     data_tensor[j, pos] = 1
+
+            # return data tensor and id string
+            if self.ext == 'fasta':
+                sample = (data_tensor, [self.data[idx].id])
+            elif self.ext == 'seq.gz':
+                sample = (data_tensor, [self.labels[idx]])
+            else:
+                sample = None
+
+        return sample
+
+    def _encode_continuous(self, idx):
+        """This function encodes oligomer starting information of each extracted sample as a continuous number mapped
+        onto a 2-dimensional vector.
+
+        - **Parameters**::
+
+            :param idx: Index or set of indices of the sample(s) that will be retrieved
+
+        - **Returns**::
+
+            :return: Sample(s) from the input data
+        """
+        # perform different sample extraction depending on whether a list of indices is given or not
+        try:
+            # initialize data tensor
+            data_tensor = torch.zeros(len(idx), 2, self.seq_len)
+
+            # fill the data tensor
+            for i, sample in enumerate(idx):
+                # calculate the continuous encoding of the current samples
+                try:
+                    if self.ext == 'fasta':
+                        data_tensor[i, :, :] = oli2number(self.data[sample].seq.upper(), self.kmer_dict,
+                                                          self.kmer_size, ambi=self.alphabet.split('_')[0])
+                    elif self.ext == 'seq.gz':
+                        data_tensor[i, :, :] = oli2number(self.data[sample], self.kmer_dict, self.kmer_size,
+                                                          ambi=self.alphabet.split('_')[0])
+                except ValueError:
+                    raise
+
+            # return data tensor and id string
+            if self.ext == 'fasta':
+                sample = (data_tensor, [self.data[i].id for i in idx])
+            elif self.ext == 'seq.gz':
+                sample = (data_tensor, [self.labels[i] for i in idx])
+            else:
+                sample = None
+
+        except TypeError:
+            # initialize data tensor
+            data_tensor = torch.zeros(2, self.seq_len)
+
+            # calculate the continuous encoding of the current sample
+            try:
+                if self.ext == 'fasta':
+                    data_tensor = oli2number(self.data[idx].seq.upper(), self.kmer_dict, self.kmer_size,
+                                             ambi=self.alphabet.split('_')[0])
+                elif self.ext == 'seq.gz':
+                    data_tensor = oli2number(self.data[idx], self.kmer_dict, self.kmer_size,
+                                             ambi=self.alphabet.split('_')[0])
+
+            except ValueError:
+                raise
 
             # return data tensor and id string
             if self.ext == 'fasta':
