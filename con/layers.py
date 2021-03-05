@@ -16,6 +16,8 @@ from sklearn.linear_model.base import LinearModel, LinearClassifierMixin
 
 from .utils import kernels, gaussian_filter_1d, matrix_inverse_sqrt, spherical_kmeans, EPS, normalize_, ClassBalanceLoss
 
+import matplotlib.pyplot as plt
+
 
 class CONLayer(nn.Conv1d):
     """ Convolutional Oligo Kernel Network Layer
@@ -141,8 +143,8 @@ class CONLayer(nn.Conv1d):
         weight_alphanet = torch.zeros([self.out_channels, self.in_channels])
 
         # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
-        for i in anchors:
-            weight_alphanet[i, :] = self.kmer_ref[:, i]
+        for i in range(self.out_channels):
+            weight_alphanet[i, :] = self.kmer_ref[:, anchors[i]]
 
         # make sure that the alphanet weights and the auxiliary weight variable have the same shape
         weight_alphanet = weight_alphanet.view_as(self.alphanet.weight)
@@ -296,8 +298,8 @@ class CONLayer(nn.Conv1d):
         weight_alphanet = torch.zeros([self.out_channels, self.in_channels])
 
         # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
-        for i in anchors:
-            weight_alphanet[i, :] = self.kmer_ref[:, i]
+        for i in range(self.out_channels):
+            weight_alphanet[i, :] = self.kmer_ref[:, anchors[i]]
 
         # make sure that the alphanet weights and the auxiliary weight variable have the same shape
         weight_alphanet = weight_alphanet.view_as(self.alphanet.weight)
@@ -912,7 +914,7 @@ class LinearMax(nn.Linear, LinearModel, LinearClassifierMixin):
                 self.bias.data.copy_(torch.from_numpy(w[:, -1]))
 
             # perform a classification with the given input
-            y_pred = self(x).view(-1)
+            y_pred = self(x)#.view(-1)
 
             # calculate the loss
             #   -> differs between binary and multiclass

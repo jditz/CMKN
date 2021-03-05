@@ -1186,9 +1186,15 @@ class CON(nn.Module):
 
                     # backward propagate + optimize only if in training phase
                     if phase == 'train':
+                        #for n, p in self.named_parameters():
+                        #    print('layer: {}, grad: {}'.format(n, p.grad))
                         loss.backward()
+                        #for n, p in self.named_parameters():
+                        #    print('layer: {}, grad: {}'.format(n, p.grad))
                         #torch.nn.utils.clip_grad_norm_(self.oligo.parameters(), 0.5)
                         optimizer.step()
+                        #for n, p in self.named_parameters():
+                        #    print('layer: {}, grad: {}'.format(n, p.grad))
                         self.normalize_()
 
                     # update statistics
