@@ -12,11 +12,9 @@ import torch.nn.functional as F
 import numpy as np
 
 from scipy import optimize
-from sklearn.linear_model.base import LinearModel, LinearClassifierMixin
+from sklearn.linear_model._base import LinearModel, LinearClassifierMixin
 
 from .utils import kernels, gaussian_filter_1d, matrix_inverse_sqrt, spherical_kmeans, EPS, normalize_, ClassBalanceLoss
-
-import matplotlib.pyplot as plt
 
 
 class CONLayer(nn.Conv1d):
@@ -832,17 +830,16 @@ class GlobalSum1D(nn.Module):
 
     This class implements a global sum pooling layer for neural networks.
     """
-    def __init__(self, sigma):
+    def __init__(self):
         # initialize parent class
         super(GlobalSum1D, self).__init__()
-        self.sigma = sigma
 
     def forward(self, x, mask=None):
         if mask is None:
-            return x.sum(dim=-1) * np.sqrt(np.pi)*self.sigma
+            return x.sum(dim=-1)
         mask = mask.float().unsqueeze(1)
         x = x * mask
-        return x.sum(dim=-1)/mask.sum(dim=-1) * np.sqrt(np.pi)*self.sigma
+        return x.sum(dim=-1)/mask.sum(dim=-1)
 
 
 # define directory macro for simple access of pooling options

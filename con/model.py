@@ -790,6 +790,9 @@ class CON(nn.Module):
             kernel_args = [1, 1, 10000]
             kernel_args_trainable = False
 
+        # store value of parameter sigma for forward pass
+        self.sigma = kernel_args[0]
+
         # initialize the CON layer using all predefined parameters
         self.oligo = CONLayer(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
                               kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
@@ -830,10 +833,7 @@ class CON(nn.Module):
             self.conv = nn.Sequential(*convlayers)
 
         # set the specified global pooling layer
-        if pool_global == 'sum':
-            self.global_pool = POOLINGS[pool_global](kernel_args[0])
-        else:
-            self.global_pool = POOLINGS[pool_global]()
+        self.global_pool = POOLINGS[pool_global]()
 
         # set the number of output features
         #   -> this is the number of output channels of the last CON layer
@@ -1191,7 +1191,7 @@ class CON(nn.Module):
                         loss.backward()
                         #for n, p in self.named_parameters():
                         #    print('layer: {}, grad: {}'.format(n, p.grad))
-                        #torch.nn.utils.clip_grad_norm_(self.oligo.parameters(), 0.5)
+                        #torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
                         optimizer.step()
                         #for n, p in self.named_parameters():
                         #    print('layer: {}, grad: {}'.format(n, p.grad))
