@@ -797,6 +797,7 @@ def exp_oli(x, y, sigma=1, scale=1, alpha=10000):
         :param x: Input (convolution of input position with anchor points) to the oligo kernel function.
             :type x: Tensor
         :param y: Input (convolution of oligomer encoding tensors) to the oligo kernel function
+            :type y: Tensor
         :param sigma: Degree of positional uncertainty.
             :type sigma: Float
         :param scale: Scaling parameter to accommodate for the oligo kernel network formulation.
@@ -953,9 +954,10 @@ class ClassBalanceLoss(nn.Module):
         return cb_loss
 
 
+"""
 class MatrixInverseSqrt(torch.autograd.Function):
-    """Matrix inverse square root for a symmetric definite positive matrix
-    """
+    Matrix inverse square root for a symmetric definite positive matrix
+    
     @staticmethod
     def forward(ctx, input, eps=1e-2):
         use_cuda = input.is_cuda
@@ -980,6 +982,49 @@ class MatrixInverseSqrt(torch.autograd.Function):
         ej = e_sqrt.view([-1, 1]).expand_as(v)
         f = torch.reciprocal((ei + ej) * ei * ej)
         grad_input = -v.mm((f*(v.t().mm(grad_output.mm(v)))).mm(v.t()))
+        return grad_input, None
+"""
+
+class MatrixInverseSqrt(torch.autograd.Function):
+    """Matrix inverse square root for a symmetric definite positive matrix
+    """
+    @staticmethod
+    def forward(ctx, input, eps=1e-2):
+        dim = input.dim()
+        ctx.dim = dim
+        use_cuda = input.is_cuda
+        if input.size(0) < 300:
+            input = input.cpu()
+        e, v = torch.symeig(input, eigenvectors=True)
+        if use_cuda and input.size(0) < 300:
+            e = e.cuda()
+            v = v.cuda()
+        e = e.clamp(min=0)
+        e_sqrt = e.sqrt_().add_(eps)
+        ctx.save_for_backward(e_sqrt, v)
+        e_rsqrt = e_sqrt.reciprocal()
+
+        if dim > 2:
+            output = v.bmm(v.permute(0, 2, 1) * e_rsqrt.unsqueeze(-1))
+        else:
+            output = v.mm(v.t() * e_rsqrt.view(-1, 1))
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        e_sqrt, v = ctx.saved_variables
+        if ctx.dim > 2:
+            ei = e_sqrt.unsqueeze(1).expand_as(v)
+            ej = e_sqrt.unsqueeze(-1).expand_as(v)
+        else:
+            ei = e_sqrt.expand_as(v)
+            ej = e_sqrt.view(-1, 1).expand_as(v)
+        f = torch.reciprocal((ei + ej) * ei * ej)
+        if ctx.dim > 2:
+            vt = v.permute(0, 2, 1)
+            grad_input = -v.bmm((f*(vt.bmm(grad_output.bmm(v)))).bmm(vt))
+        else:
+            grad_input = -v.mm((f*(v.t().mm(grad_output.mm(v)))).mm(v.t()))
         return grad_input, None
 
 

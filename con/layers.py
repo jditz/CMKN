@@ -10,11 +10,14 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
+from decimal import Decimal, ROUND_HALF_DOWN
 
 from scipy import optimize
 from sklearn.linear_model._base import LinearModel, LinearClassifierMixin
 
 from .utils import kernels, gaussian_filter_1d, matrix_inverse_sqrt, spherical_kmeans, EPS, normalize_, ClassBalanceLoss
+
+import matplotlib.pyplot as plt
 
 
 class CONLayer(nn.Conv1d):
@@ -62,13 +65,6 @@ class CONLayer(nn.Conv1d):
         super(CONLayer, self).__init__(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
                                        dilation=dilation, groups=groups, bias=False)
 
-        # initialize the Conv1D layer that handles the oligomer comparison term and freeze layer's parameters
-        #   -> weights will be updated by the constraints; no learning needed
-        self.alphanet = nn.Conv1d(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
-                                  dilation=dilation, groups=groups, bias=False)
-        for param in self.alphanet.parameters():
-            param.requires_grad = False
-
         # set parameters
         self.subsampling = subsampling
         self.filter_size = filter_size
@@ -77,7 +73,11 @@ class CONLayer(nn.Conv1d):
         # add the oligomer position encoding matrix for the reference sequence as a buffer to the model
         self.kmer_ref = kmer_ref
 
-        # specify if the linear transformation factor will be calculated
+        # initialize buffer for the oligomer comparison term
+        self.register_buffer("alphanet", torch.Tensor(out_channels, self.in_channels, self.filter_size))
+
+        # specify if the linear transformation factor will be calculated and initialize a buffer for the linear
+        # transformation term
         self._need_lintrans_computed = True
         self.register_buffer("lintrans", torch.Tensor(out_channels, out_channels))
 
@@ -106,20 +106,21 @@ class CONLayer(nn.Conv1d):
         """Initialization of CONLayer's weights and alphanet's weights
 
         The anchor points of the CON layer will be equidistantly distributed over the whole length of the sequence.
-        Afterwards, alphanet's weights will be set to the corresponding oligomer encodings stored in self.kmer_ref.
+        Afterwards, the buffer alphanet will be set to the corresponding oligomer encodings stored in self.kmer_ref.
 
         - **Updates**::
 
             self.weight (out_channels x in_channels): These represent the anchor points
-            self.alphanet.weight (out_channels x in_channels): These represent the encoded oligomer starting at the
-                                                               anchor points in the reference sequence
+            self.alphanet (out_channels x in_channels): These represent the encoded oligomer starting at the
+                                                        anchor points in the reference sequence
         """
         # determine the sequence length
         seq_len = self.kmer_ref.shape[1]
 
         # get anchor points that are equidistantly distributed over the whole sequence
         dist = seq_len / self.out_channels
-        anchors = [round(dist / 2 + i * dist) for i in range(self.out_channels)]
+        anchors = [int(Decimal(dist / 2 + i * dist).quantize(Decimal('1.'), rounding=ROUND_HALF_DOWN))
+                   for i in range(self.out_channels)]
 
         # initialize weight tensor
         weight = torch.zeros([self.out_channels, self.in_channels])
@@ -145,10 +146,10 @@ class CONLayer(nn.Conv1d):
             weight_alphanet[i, :] = self.kmer_ref[:, anchors[i]]
 
         # make sure that the alphanet weights and the auxiliary weight variable have the same shape
-        weight_alphanet = weight_alphanet.view_as(self.alphanet.weight)
+        weight_alphanet = weight_alphanet.view_as(self.alphanet)
 
         # update alphanet's weights
-        self.alphanet.weight.data = weight_alphanet.data
+        self.alphanet.data = weight_alphanet.data
 
     def train(self, mode=True):
         """ Toggle train mode
@@ -205,12 +206,38 @@ class CONLayer(nn.Conv1d):
         """
         # calculate the convolution between input and anchor points
         x_out = super(CONLayer, self).forward(x_in)
+        #aux = super(CONLayer, self).forward(x_in)
 
         # calculate convolution between oligomer encoding of the input and oligomer encoding of the anchor points
-        oli_out = self.alphanet.forward(oli_in)
+        oli_out = F.conv1d(oli_in, self.alphanet, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
         # evaluate kernel function with the result
         x_out = self.kappa(x_out, oli_out)
+
+        #bsize = x_in.shape[0]
+        #torch.save({'posConv{}'.format(bsize): aux, 'oliConv{}'.format(bsize): oli_out, 'kappa{}'.format(bsize): x_out},
+        #           'data/debug/convLayer_tensors_batchsize{}.pkl'.format(bsize))
+        #fig, axs = plt.subplots(4)
+        #im1 = axs[0].imshow(aux[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
+        #im2 = axs[1].imshow(oli_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
+        #axs[2].imshow(oli_out[0, :, :].detach().numpy() == 1, interpolation=None, aspect='auto')
+        #im3 = axs[3].imshow(x_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
+        #fig.colorbar(im1, ax=axs[0])
+        #fig.colorbar(im2, ax=axs[1])
+        #fig.colorbar(im3, ax=axs[3])
+
+        anchors = [int(Decimal((np.arccos(anchor[0].item()) / np.pi) * (oli_out.shape[-1] - 1)).quantize(Decimal('1.'),
+                                                                                               rounding=ROUND_HALF_DOWN)
+                       )
+                   for anchor in self.weight]
+        print('')
+        print(anchors)
+        print('')
+        plt.figure()
+        plt.imshow(oli_out[0, :, :].detach().numpy() == 1, interpolation=None, aspect='auto')
+        plt.title('[]'.format(anchors))
+        plt.show()
+
         return x_out
 
     def _mult_layer(self, x_in, lintrans):
@@ -261,8 +288,8 @@ class CONLayer(nn.Conv1d):
 
     def normalize_(self):
         """ Function to enforce the constraints on the anchor points and alphanet's weights. The kernel function is
-        valid iff all weights are normalized, point to discrete sequence positions, and the corresponding oligomers are
-        encoded by alphanet.weight.
+        valid iff all weights are normalized (, point to discrete sequence positions,) and the corresponding oligomers
+        are encoded by alphanet.weight.
         """
         # get the sequence length
         seq_len = self.kmer_ref.shape[1]
@@ -274,22 +301,25 @@ class CONLayer(nn.Conv1d):
         self.weight.data.div_(norm)
 
         # transform weights into sequence positions
-        anchors = [round((np.arccos(anchor[0].item()) / np.pi) * (seq_len - 1)) for anchor in self.weight]
+        anchors = [int(Decimal((np.arccos(anchor[0].item()) / np.pi) * (seq_len - 1)).quantize(Decimal('1.'),
+                                                                                               rounding=ROUND_HALF_DOWN)
+                       )
+                   for anchor in self.weight]
 
         # initialize weight tensor
-        weight = torch.zeros([self.out_channels, self.in_channels])
+        #weight = torch.zeros([self.out_channels, self.in_channels])
 
         # fill the tensor by projecting anchor point positions onto the upper half of the unit circle
-        for i in range(self.out_channels):
-            # calculate the x coordinate
-            weight[i, 0] = np.cos((anchors[i] / seq_len) * np.pi)
-            weight[i, 1] = np.sin((anchors[i] / seq_len) * np.pi)
+        #for i in range(self.out_channels):
+        #    # calculate the x coordinate
+        #    weight[i, 0] = np.cos((anchors[i] / seq_len) * np.pi)
+        #    weight[i, 1] = np.sin((anchors[i] / seq_len) * np.pi)
 
         # make sure that the layer weights and the auxiliary weight variable have the same shape
-        weight = weight.view_as(self.weight)
+        #weight = weight.view_as(self.weight)
 
         # update the layer weight
-        self.weight.data = weight.data
+        #self.weight.data = weight.data
         self._need_lintrans_computed = True
 
         # initialize alphanet weight tensor
@@ -300,10 +330,10 @@ class CONLayer(nn.Conv1d):
             weight_alphanet[i, :] = self.kmer_ref[:, anchors[i]]
 
         # make sure that the alphanet weights and the auxiliary weight variable have the same shape
-        weight_alphanet = weight_alphanet.view_as(self.alphanet.weight)
+        weight_alphanet = weight_alphanet.view_as(self.alphanet)
 
         # update alphanet's weights
-        self.alphanet.weight.data = weight_alphanet.data
+        self.alphanet.data = weight_alphanet.data
 
 
 class CONLayerOld(nn.Conv1d):

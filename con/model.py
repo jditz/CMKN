@@ -713,16 +713,15 @@ class CON(nn.Module):
 
     def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
                  kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batch_norm=True, dropout=False,
-                 pool_global='sum', pool_conv='mean', penalty='l2', scaler=None, num_classes=1, **kwargs):
+                 pool_global=None, pool_conv='mean', penalty='l2', scaler=None, num_classes=1, **kwargs):
         """Constructor of the CON class.
 
         - **Parameters**::
 
             :param out_channels_list: Number of output channels of each layer
                 :type out_channels_list: List of Integer
-            :param ref_kmerPos: Distribution of k-mers in the reference sequence. Used for the evaluation of phi(.)
-                                for the anchor points
-                :type ref_kmerPos: Tensor (number of kmers x length of sequence)
+            :param ref_kmerPos: Tensor encoding the oligomer starting at each position of the reference sequence
+                :type ref_kmerPos: Tensor (2 x length of sequence)
             :param filter_sizes: Size of the filter for each layer
                 :type filter_sizes: List of Integer
             :param strides: List of stride factors for each pooling layer
@@ -832,16 +831,23 @@ class CON(nn.Module):
             # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
             self.conv = nn.Sequential(*convlayers)
 
-        # set the specified global pooling layer
-        self.global_pool = POOLINGS[pool_global]()
+        if pool_global is None:
+            # set the number of output features
+            #   -> this is the number of output channels of the last CON layer multiplied by the sequence length
+            self.out_features = out_channels_list[-1] * self.seq_len
+            self.global_pool = None
+        else:
+            # set the specified global pooling layer
+            self.global_pool = POOLINGS[pool_global]()
 
-        # set the number of output features
-        #   -> this is the number of output channels of the last CON layer
-        self.out_features = out_channels_list[-1]
+            # set the number of output features
+            #   -> this is the number of output channels of the last CON layer
+            self.out_features = out_channels_list[-1]
 
         # initialize the classification layer; use a standard fully connected layer if scaler is set to None
         if scaler is None:
-            self.classifier = nn.Linear(self.out_features, self.num_classes, fit_bias)
+            self.fc = nn.Linear(self.out_features, self.num_classes*100, bias=fit_bias)
+            self.classifier = nn.Linear(self.num_classes*100, self.num_classes, bias=fit_bias)
         else:
             self.initialize_scaler(scaler)
             self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias,
@@ -870,9 +876,15 @@ class CON(nn.Module):
             :return: Evaluation of the CON layer(s) with subsequent pooling using the given input
         """
         output = self.oligo(input, oli)
+
         if self.nb_conv_layers > 0:
             output = self.conv(output)
-        output = self.global_pool(output, mask)
+
+        if self.global_pool is None:
+            output = output.view(output.size(0), -1)
+        else:
+            output = self.global_pool(output, mask)
+
         return output
 
     def forward(self, input, oli, proba=False):
@@ -894,6 +906,7 @@ class CON(nn.Module):
         if isinstance(self.classifier, LinearMax):
             return self.classifier(output, proba)
         else:
+            output = self.fc(output)
             output = self.classifier(output)
             if proba:
                 # activate with sigmoid function only for binary classification
@@ -1186,18 +1199,12 @@ class CON(nn.Module):
 
                     # backward propagate + optimize only if in training phase
                     if phase == 'train':
-                        #for n, p in self.named_parameters():
-                        #    print('layer: {}, grad: {}'.format(n, p.grad))
                         loss.backward()
-                        #for n, p in self.named_parameters():
-                        #    print('layer: {}, grad: {}'.format(n, p.grad))
-                        #torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
                         optimizer.step()
-                        #for n, p in self.named_parameters():
-                        #    print('layer: {}, grad: {}'.format(n, p.grad))
                         self.normalize_()
 
-                    # update statistics
+                     # update statistics
                     running_loss += loss.item() * size
                     running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
                                                   torch.ones(pred.shape[0]) * self.num_classes).item()
