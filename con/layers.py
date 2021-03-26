@@ -119,8 +119,7 @@ class CONLayer(nn.Conv1d):
 
         # get anchor points that are equidistantly distributed over the whole sequence
         dist = seq_len / self.out_channels
-        anchors = [int(Decimal(dist / 2 + i * dist).quantize(Decimal('1.'), rounding=ROUND_HALF_DOWN))
-                   for i in range(self.out_channels)]
+        anchors = [dist / 2 + i * dist for i in range(self.out_channels)]
 
         # initialize weight tensor
         weight = torch.zeros([self.out_channels, self.in_channels])
@@ -138,12 +137,15 @@ class CONLayer(nn.Conv1d):
         self.weight.data = weight.data
         self._need_lintrans_computed = True
 
+        # convert anchor points into discrete seqeuence positions
+        anchors_int = [int(Decimal(anchor).quantize(Decimal('1.'), rounding=ROUND_HALF_DOWN)) for anchor in anchors]
+
         # initialize alphanet weight tensor
         weight_alphanet = torch.zeros([self.out_channels, self.in_channels])
 
         # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
         for i in range(self.out_channels):
-            weight_alphanet[i, :] = self.kmer_ref[:, anchors[i]]
+            weight_alphanet[i, :] = self.kmer_ref[:, anchors_int[i]]
 
         # make sure that the alphanet weights and the auxiliary weight variable have the same shape
         weight_alphanet = weight_alphanet.view_as(self.alphanet)
@@ -226,17 +228,17 @@ class CONLayer(nn.Conv1d):
         #fig.colorbar(im2, ax=axs[1])
         #fig.colorbar(im3, ax=axs[3])
 
-        anchors = [int(Decimal((np.arccos(anchor[0].item()) / np.pi) * (oli_out.shape[-1] - 1)).quantize(Decimal('1.'),
-                                                                                               rounding=ROUND_HALF_DOWN)
-                       )
-                   for anchor in self.weight]
-        print('')
-        print(anchors)
-        print('')
-        plt.figure()
-        plt.imshow(oli_out[0, :, :].detach().numpy() == 1, interpolation=None, aspect='auto')
-        plt.title('[]'.format(anchors))
-        plt.show()
+        #anchors = [int(Decimal((np.arccos(anchor[0].item()) / np.pi) * (oli_out.shape[-1] - 1)).quantize(Decimal('1.'),
+        #                                                                                       rounding=ROUND_HALF_DOWN)
+        #               )
+        #           for anchor in self.weight]
+        #print('')
+        #print(anchors)
+        #print('')
+        #plt.figure()
+        #plt.imshow(oli_out[0, :, :].detach().numpy() == 1, interpolation=None, aspect='auto')
+        #plt.title('[]'.format(anchors))
+        #plt.show()
 
         return x_out
 
@@ -379,7 +381,7 @@ class CONLayerOld(nn.Conv1d):
 
         # initialize parent class
         super(CONLayerOld, self).__init__(self.in_channels, out_channels, filter_size, stride=1, padding=padding,
-                                       dilation=dilation, groups=groups, bias=False)
+                                          dilation=dilation, groups=groups, bias=False)
 
         # set parameters
         self.subsampling = subsampling

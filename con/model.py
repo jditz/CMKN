@@ -707,6 +707,23 @@ class CONOld(nn.Module):
         return self
 
 
+class TestCON(nn.Module):
+    def __init__(self, ref_kmerPos):
+        super(TestCON, self).__init__()
+        self.layer = CONLayer(99, ref_kmerPos)
+        self.fc1 = nn.Linear(99*99, 200, bias=True)
+        self.fc2 = nn.Linear(200, 2, bias=True)
+
+    def forward(self, x_in, oli_in):
+        x_out = self.layer(x_in, oli_in)
+        x_out = x_out.view(x_out.size(0), -1)
+        x_out = self.fc1(x_out)
+        return self.fc2(x_out)
+
+    def initialize(self):
+        self.layer.initialize_weights()
+
+
 class CON(nn.Module):
     """Convolutional Oligo Kernel Network
     """
@@ -1200,7 +1217,7 @@ class CON(nn.Module):
                     # backward propagate + optimize only if in training phase
                     if phase == 'train':
                         loss.backward()
-                        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                        #torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
                         optimizer.step()
                         self.normalize_()
 
