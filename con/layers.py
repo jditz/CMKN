@@ -214,7 +214,7 @@ class CONLayer(nn.Conv1d):
         oli_out = F.conv1d(oli_in, self.alphanet, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
         # evaluate kernel function with the result
-        x_out = self.kappa(x_out, oli_out)
+        x_out = self.kappa(x_out, oli_out.type(torch.bfloat16))
 
         #bsize = x_in.shape[0]
         #torch.save({'posConv{}'.format(bsize): aux, 'oliConv{}'.format(bsize): oli_out, 'kappa{}'.format(bsize): x_out},
