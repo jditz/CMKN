@@ -25,7 +25,7 @@ class CONLayer(nn.Conv1d):
 
     This class implements one layer of a convolutional Oligo Kernel Network (CON).
     """
-    def __init__(self, out_channels, kmer_ref, dilation=1, groups=1, subsampling=1,
+    def __init__(self, out_channels, kmer_ref, cutoff, dilation=1, groups=1, subsampling=1,
                  kernel_func="exp_oli", kernel_args=[1, 1, 10000], kernel_args_trainable=False):
         """Constructor of a CON layer
 
@@ -36,6 +36,8 @@ class CONLayer(nn.Conv1d):
             :param kmer_ref: This tensor holds the encoded reference sequence, i.e. the oligomer starting at each
                              position of the reference sequence is encoded by a 2-dimensional vector
                 :type kmer_ref: Tensor (2 x |S|)
+            :param cutoff: All values of the alphanet convolution that exceed the cutoff need to be set to one
+                :type cutoff: Float
             :param dilation: Controls the spacing between the kernel points; also known as the à trous algorithm
                 :type dilation: Integer (Default: 1)
             :param groups: Controls the connections between inputs and outputs
@@ -72,6 +74,7 @@ class CONLayer(nn.Conv1d):
 
         # add the oligomer position encoding matrix for the reference sequence as a buffer to the model
         self.kmer_ref = kmer_ref
+        self.cutoff = cutoff
 
         # initialize buffer for the oligomer comparison term
         self.register_buffer("alphanet", torch.Tensor(out_channels, self.in_channels, self.filter_size))
@@ -213,8 +216,13 @@ class CONLayer(nn.Conv1d):
         # calculate convolution between oligomer encoding of the input and oligomer encoding of the anchor points
         oli_out = F.conv1d(oli_in, self.alphanet, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
+        # make sure that all valid entries in oli_out are equal to one
+        aux = torch.ones(oli_out.shape)
+        oli_out = torch.where(oli_out < self.cutoff, oli_out, aux)
+
         # evaluate kernel function with the result
-        x_out = self.kappa(x_out, oli_out.type(torch.bfloat16))
+        #x_out = self.kappa(x_out, oli_out.type(torch.bfloat16))
+        x_out = self.kappa(x_out, oli_out)
 
         #bsize = x_in.shape[0]
         #torch.save({'posConv{}'.format(bsize): aux, 'oliConv{}'.format(bsize): oli_out, 'kappa{}'.format(bsize): x_out},

@@ -728,7 +728,7 @@ class CON(nn.Module):
     """Convolutional Oligo Kernel Network
     """
 
-    def __init__(self, out_channels_list, ref_kmerPos, filter_sizes, strides, paddings, kernel_func=None,
+    def __init__(self, out_channels_list, ref_kmerPos, cutoff, filter_sizes, strides, paddings, kernel_func=None,
                  kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batch_norm=True, dropout=False,
                  pool_global=None, pool_conv='mean', penalty='l2', scaler=None, num_classes=1, **kwargs):
         """Constructor of the CON class.
@@ -739,6 +739,8 @@ class CON(nn.Module):
                 :type out_channels_list: List of Integer
             :param ref_kmerPos: Tensor encoding the oligomer starting at each position of the reference sequence
                 :type ref_kmerPos: Tensor (2 x length of sequence)
+            :param cutoff:All values of OligoLayer'S alphanet convolution that exceed the cutoff need to be set to one
+                :type cutoff: Float
             :param filter_sizes: Size of the filter for each layer
                 :type filter_sizes: List of Integer
             :param strides: List of stride factors for each pooling layer
@@ -810,8 +812,9 @@ class CON(nn.Module):
         self.sigma = kernel_args[0]
 
         # initialize the CON layer using all predefined parameters
-        self.oligo = CONLayer(out_channels_list[0], ref_kmerPos, subsampling=strides[0], kernel_func=kernel_func,
-                              kernel_args=kernel_args, kernel_args_trainable=kernel_args_trainable, **kwargs)
+        self.oligo = CONLayer(out_channels_list[0], ref_kmerPos, cutoff, subsampling=strides[0],
+                              kernel_func=kernel_func, kernel_args=kernel_args,
+                              kernel_args_trainable=kernel_args_trainable, **kwargs)
 
         # initialize the additional "normal" convolutional layers if any should be used
         self.nb_conv_layers = len(out_channels_list) - 1
