@@ -125,7 +125,7 @@ class CONLayer(nn.Conv1d):
         anchors = [dist / 2 + i * dist for i in range(self.out_channels)]
 
         # initialize weight tensor
-        weight = torch.zeros([self.out_channels, self.in_channels])
+        weight = self.weight.new_zeros([self.out_channels, self.in_channels])
 
         # fill the tensor by projecting anchor point positions onto the upper half of the unit circle
         for i in range(self.out_channels):
@@ -144,7 +144,7 @@ class CONLayer(nn.Conv1d):
         anchors_int = [int(Decimal(anchor).quantize(Decimal('1.'), rounding=ROUND_HALF_DOWN)) for anchor in anchors]
 
         # initialize alphanet weight tensor
-        weight_alphanet = torch.zeros([self.out_channels, self.in_channels])
+        weight_alphanet = self.alphanet.new_zeros([self.out_channels, self.in_channels])
 
         # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
         for i in range(self.out_channels):
@@ -211,13 +211,13 @@ class CONLayer(nn.Conv1d):
         """
         # calculate the convolution between input and anchor points
         x_out = super(CONLayer, self).forward(x_in)
-        #aux = super(CONLayer, self).forward(x_in)
+        #aux1 = super(CONLayer, self).forward(x_in)
 
         # calculate convolution between oligomer encoding of the input and oligomer encoding of the anchor points
         oli_out = F.conv1d(oli_in, self.alphanet, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
         # make sure that all valid entries in oli_out are equal to one
-        aux = torch.ones(oli_out.shape)
+        aux = oli_out.new_ones(oli_out.shape)
         oli_out = torch.where(oli_out < self.cutoff, oli_out, aux)
 
         # evaluate kernel function with the result
@@ -228,7 +228,7 @@ class CONLayer(nn.Conv1d):
         #torch.save({'posConv{}'.format(bsize): aux, 'oliConv{}'.format(bsize): oli_out, 'kappa{}'.format(bsize): x_out},
         #           'data/debug/convLayer_tensors_batchsize{}.pkl'.format(bsize))
         #fig, axs = plt.subplots(4)
-        #im1 = axs[0].imshow(aux[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
+        #im1 = axs[0].imshow(aux1[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
         #im2 = axs[1].imshow(oli_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
         #axs[2].imshow(oli_out[0, :, :].detach().numpy() == 1, interpolation=None, aspect='auto')
         #im3 = axs[3].imshow(x_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
@@ -333,7 +333,7 @@ class CONLayer(nn.Conv1d):
         self._need_lintrans_computed = True
 
         # initialize alphanet weight tensor
-        weight_alphanet = torch.zeros([self.out_channels, self.in_channels])
+        weight_alphanet = self.alphanet.new_zeros([self.out_channels, self.in_channels])
 
         # fill alphanet weight tensor with the oligomer encodings that correspond to the initialized anchor points
         for i in range(self.out_channels):

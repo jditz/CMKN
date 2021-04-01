@@ -929,7 +929,7 @@ class ClassBalanceLoss(nn.Module):
         if labels_one_hot.shape[0] == 1:
             logits = logits.view_as(labels_one_hot)
 
-        weights_tensor = torch.tensor(weights).float()
+        weights_tensor = labels_one_hot.new_tensor(weights)
         weights_tensor = weights_tensor.unsqueeze(0)
         weights_tensor = weights_tensor.repeat(labels_one_hot.shape[0], 1) * labels_one_hot
         weights_tensor = weights_tensor.sum(1)

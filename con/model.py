@@ -986,10 +986,6 @@ class CON(nn.Module):
         # set training mode of the model to False
         self.train(False)
 
-        # move model either to CPU or GPU
-        if use_cuda:
-            self.cuda()
-
         # detect the number of samples that will be classified and initialize tensor that stores the targets of each
         # sample
         n_samples = len(data_loader.dataset)
@@ -1013,6 +1009,7 @@ class CON(nn.Module):
             # transfer sample data to GPU if computations are performed there
             if use_cuda:
                 data = data.cuda()
+                oli_in = oli_in.cuda()
 
             # do not keep track of the gradients during the forward propagation
             with torch.no_grad():
@@ -1086,7 +1083,6 @@ class CON(nn.Module):
 
             :return training and validation accuracies and losses of each epoch
         """
-
         print("Initializing CON layers")
         tic = timer()
 
@@ -1194,7 +1190,7 @@ class CON(nn.Module):
                             output = self(data, oli)
 
                             # create prediction tensor
-                            pred = torch.zeros(output.shape)
+                            pred = target.new_zeros(output.shape)
                             for i in range(output.shape[0]):
                                 pred[i, category_from_output(output[i, :])] = 1
 
@@ -1207,7 +1203,7 @@ class CON(nn.Module):
                         output = self(data, oli)
 
                         # create prediction tensor
-                        pred = torch.zeros(output.shape)
+                        pred = target.new_zeros(output.shape)
                         for i in range(output.shape[0]):
                             pred[i, category_from_output(output[i, :])] = 1
 
@@ -1224,10 +1220,10 @@ class CON(nn.Module):
                         optimizer.step()
                         self.normalize_()
 
-                     # update statistics
+                    # update statistics
                     running_loss += loss.item() * size
                     running_corrects += torch.sum(torch.sum(pred == target.data, 1) ==
-                                                  torch.ones(pred.shape[0]) * self.num_classes).item()
+                                                  target.new_ones(pred.shape[0]) * self.num_classes).item()
 
                 # calculate loss and accuracy in the current epoch
                 epoch_loss = running_loss / len(data_loader[phase].dataset)
