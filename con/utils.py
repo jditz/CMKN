@@ -210,7 +210,7 @@ def create_consensus(sequences, extension=None, ambi='DNA'):
 
         # create consensus sequence
         summary_align = AlignInfo.SummaryInfo(alignment)
-        consensus = summary_align.dumb_consensus(threshold=0.5, ambiguous=ambi)
+        consensus = summary_align.dumb_consensus(threshold=0.25, ambiguous=ambi)
 
     return consensus
 
@@ -507,21 +507,32 @@ def anchor_weight_matrix(anchors, kmer_ref, kmer_dict, sigma, num_best, viz=True
     # import section
     from scipy.ndimage import gaussian_filter1d
 
-    # initialize output matrix
-    image_matrix = np.zeros(kmer_ref.shape)
+    # initialize output and anchor weight matrix
+    image_matrix = np.zeros((len(kmer_dict), kmer_ref.shape[1]))
+    anchor_weight = np.zeros(kmer_ref.shape[1])
 
-    # iterate over all anchors as update image_matrix
+    # calculate the weights imposed by the anchors at each position
     for anchor in anchors:
-
         # get positions that are affected by the current anchor
         weight1, pos1 = math.modf(anchor)
         pos1 = int(pos1)
         pos2 = pos1 + 1
         weight2 = 1 - weight1
 
-        # update image_matrix
-        image_matrix[:, pos1] = image_matrix[:, pos1] + (kmer_ref[:, pos1].detach().numpy() * weight1)
-        image_matrix[:, pos2] = image_matrix[:, pos2] + (kmer_ref[:, pos2].detach().numpy() * weight2)
+        # update anchor weights
+        anchor_weight[pos1] += weight1
+        anchor_weight[pos2] += weight2
+
+    # iterate over all oligomers to calculate the weighted oligo functions
+    for i in range(image_matrix.shape[0]):
+        # get all position where the current oligomer is present in the reference sequence
+        oligo_pos = torch.nonzero(kmer_ref[i, :]).numpy()
+        oligo_pos_weights = kmer_ref[i, oligo_pos].numpy()
+
+        # iterate over all sequence positions to calculate oligo function at each position
+        for j in range(image_matrix.shape[1]):
+            image_matrix[i, j] = anchor_weight[j] * np.sum(np.exp(-(1 / (2 * sigma ** 2)) * (oligo_pos - j) ** 2) *
+                                                           oligo_pos_weights)
 
     # apply a Gaussian filter to incorporate the oligo kernel information
     image_matrix = gaussian_filter1d(image_matrix, sigma=sigma, mode='constant')
@@ -602,7 +613,7 @@ def model_interpretation(anchors, kmer_ref, kmer_dict, sigma, num_best, viz=True
     from scipy.ndimage import gaussian_filter1d
 
     # initialize output and anchor weight matrix
-    image_matrix = np.zeros(kmer_ref.shape)
+    image_matrix = np.zeros((len(kmer_dict), kmer_ref.shape[1]))
     anchor_weight = np.zeros(kmer_ref.shape[1])
 
     # calculate the weights imposed by the anchors at each position
@@ -620,15 +631,16 @@ def model_interpretation(anchors, kmer_ref, kmer_dict, sigma, num_best, viz=True
     # iterate over all oligomers to calculate the weighted oligo functions
     for i in range(image_matrix.shape[0]):
         # get all position where the current oligomer is present in the reference sequence
-        oligo_pos = torch.nonzero(kmer_ref[i, :]).numpy()
-        oligo_pos_weights = kmer_ref[i, oligo_pos].numpy()
+        aux_oli = np.cos((i / len(kmer_dict)) * np.pi)
+        oligo_pos = [pos for pos in range(kmer_ref.shape[1]) if math.isclose(aux_oli, kmer_ref[0, pos].item(),
+                                                                             rel_tol=1e-6)]
+        oligo_pos = np.array(oligo_pos)
 
         # iterate over all sequence positions to calculate oligo function at each position
         for j in range(image_matrix.shape[1]):
-            image_matrix[i, j] = anchor_weight[j] * np.sum(np.exp(-(1 / (2 * sigma**2)) * (oligo_pos - j)**2) *
-                                                           oligo_pos_weights)
+            image_matrix[i, j] = anchor_weight[j] * np.sum(np.exp(-(1 / (2 * sigma**2)) * (oligo_pos - j)**2))
 
-    # apply a Gaussian filter to incorporate the oligo kernel information
+    # apply a Gaussian filter to incorporate the oligo kernel width information
     image_matrix = gaussian_filter1d(image_matrix, sigma=sigma, mode='constant')
 
     # scale matrix between 0 and 1
