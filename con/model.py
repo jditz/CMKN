@@ -866,8 +866,11 @@ class CON(nn.Module):
 
         # initialize the classification layer; use a standard fully connected layer if scaler is set to None
         if scaler is None:
-            self.fc = nn.Linear(self.out_features, self.num_classes*100, bias=fit_bias)
-            self.classifier = nn.Linear(self.num_classes*100, self.num_classes, bias=fit_bias)
+            if pool_global is None:
+                self.fc = nn.Linear(self.out_features, self.num_classes*100, bias=fit_bias)
+                self.classifier = nn.Linear(self.num_classes*100, self.num_classes, bias=fit_bias)
+            else:
+                self.classifier = nn.Linear(self.out_features, self.num_classes, bias=fit_bias)
         else:
             self.initialize_scaler(scaler)
             self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias,
@@ -926,7 +929,8 @@ class CON(nn.Module):
         if isinstance(self.classifier, LinearMax):
             return self.classifier(output, proba)
         else:
-            output = self.fc(output)
+            if hasattr(self, 'fc'):
+                output = self.fc(output)
             output = self.classifier(output)
             if proba:
                 # activate with sigmoid function only for binary classification
