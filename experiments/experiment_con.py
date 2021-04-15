@@ -1,3 +1,11 @@
+#############################################
+# This file contains scripts to perform the #
+# Convolutional Oligo Kernel Network        #
+# experiments.                              #
+#                                           #
+# Author: Jonas Ditz                        #
+#############################################
+
 import os
 import argparse
 
@@ -25,28 +33,12 @@ DATA_DIR = './data/'
 # extend custom data handler for the used dataset
 class CustomHandler(CONDataset):
     def __init__(self, filepath, kmer_size=3, drug='FPV', nb_classes=3, clean_set=True):
-        if drug == 'FPV':
-            self.drug_nb = 7
-        elif drug == 'ATV':
-            self.drug_nb = 8
-        elif drug == 'IDV':
-            self.drug_nb = 9
-        elif drug == 'LPV':
-            self.drug_nb = 10
-        elif drug == 'NFV':
-            self.drug_nb = 11
-        elif drug == 'SQV':
-            self.drug_nb = 12
-        elif drug == 'TPV':
-            self.drug_nb = 13
-        elif drug == 'DRV':
-            self.drug_nb = 14
-        else:
-            raise ValueError('The dataset does not contain any information about drug resilience of HIV' +
-                             '\nagainst the specified drug!\n')
+        self.drug_nb = {'FPV': 1, 'ATV': 2, 'IDV': 3, 'LPV': 4, 'NFV': 5, 'SQV': 6, 'TPV': 7, 'DRV': 8,
+                        '3TC': 1, 'ABC': 2, 'AZT': 3, 'D4T': 4, 'DDI': 5, 'TDF': 6,
+                        'EFV': 1, 'NVP': 2, 'ETR': 3, 'RPV': 4}
 
         if clean_set:
-            aux_tup = (self.drug_nb, 'NA')
+            aux_tup = (self.drug_nb[drug], 'NA')
         else:
             aux_tup = None
 
