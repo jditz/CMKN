@@ -40,7 +40,7 @@ def load_data_hiv(type, drug_number):
     tmp = list(SeqIO.parse(filepath, 'fasta'))
 
     # get the sequences and labels
-    seq = [i.seq for i in tmp if i.id.split('|')[drug_number] != 'NA']
+    seq = [str(i.seq) for i in tmp if i.id.split('|')[drug_number] != 'NA']
     label = [class_to_label[i.id.split('|')[drug_number]] for i in tmp if i.id.split('|')[drug_number] != 'NA']
 
     return np.array(seq), np.array(label)
@@ -66,7 +66,7 @@ def experiment(info, params):
         # load stratified folds previously created
         #   -> if your are missing the file 'hivdb_stratifiedFolds.pkl' (for HIV experiments), please run the file
         #      'hivdb_preparation.py' (for HIV experiments) first. This python script can be found in the data folder.
-        with open('../data/hivdb/hivdb_stratifiedFold.pkl', 'rb') as in_file:
+        with open('../data/hivdb/hivdb_stratifiedFolds.pkl', 'rb') as in_file:
             folds = pickle.load(in_file)
             folds = folds[info[1]][info[2]]
     else:
@@ -85,3 +85,9 @@ def experiment(info, params):
 
         # perform prediction on validation data
         pred_y = clf.predict(X[fold[1]])
+
+        print(pred_y, Y[fold[1]])
+
+
+if __name__ == '__main__':
+    experiment(('HIV', 'PI', 'SQV', 6), (1, 1))
