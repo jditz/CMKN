@@ -13,19 +13,28 @@ import pickle
 
 # define the oligo kernel function
 def oligo_kernel(x, y, k, sigma):
-    res = 0
+    # initialize the gram matrix
+    gram_matrix = np.zeros((x.shape[0], y.shape[0]))
 
-    # iterate over the sequence positions
-    for i in range(len(x)):
-        for j in range(len(y)):
+    # iterate over each pair of inputs and fill the gram matrix
+    for i, xi in enumerate(x):
+        for j, yj in enumerate(y):
 
-            # skip if oligomers starting at position i and j are different
-            if x[i:i+k] == y[j:j+k]:
-                continue
+            res = 0
 
-            res += np.exp(- 1/4*sigma**2 * (i - j)**2)
+            # iterate over the sequence positions
+            for l in range(len(xi)):
+                for m in range(len(yj)):
 
-    return res * np.sqrt(np.pi) * sigma
+                    # skip if oligomers starting at position i and j are different
+                    if x[l:l+k] != y[m:m+k]:
+                        continue
+
+                    res += np.exp(- 1/4*sigma**2 * (i - j)**2)
+
+            gram_matrix[i, j] = res * np.sqrt(np.pi) * sigma
+
+    return gram_matrix
 
 
 # loading routine for HIV resistance data
@@ -87,6 +96,7 @@ def experiment(info, params):
         pred_y = clf.predict(X[fold[1]])
 
         print(pred_y, Y[fold[1]])
+        return
 
 
 if __name__ == '__main__':

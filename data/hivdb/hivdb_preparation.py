@@ -78,19 +78,25 @@ def create_fasta_pi():
             # create string to store isolate's sequence
             seq = list(PROTEASE)
 
+            # initialize flag that indicates of the current sequence is valid for training
+            flag = True
+
             # iterate over each sequence position and replace amino acid in the consensus sequence with the recorded
             # mutation
             for i in range(mut_start, mut_start+99):
 
-                # skip each position without a recorded mutation
-                if tmp[i] == '-':
+                # set flag to false if unexpected information is stored for the current sequence
+                if len(tmp[i]) != 1 or tmp[i] == '.':
+                    flag = False
                     continue
 
-                seq[i-mut_start] = tmp[i]
+                # exchange the consensus amino acid, if a mutation is recorded at position i of the current sequence
+                elif tmp[i] != '-':
+                    seq[i-mut_start] = tmp[i]
 
             # write id string and sequence to the output fasta file
-            f_out.write(id_string + '\n')
-            f_out.write(''.join(seq) + '\n')
+            if flag:
+                f_out.write(id_string + '\n' + ''.join(seq) + '\n')
 
     # close the output file
     f_out.close()
@@ -146,19 +152,25 @@ def create_fasta_nrti():
             # create string to store isolate's sequence
             seq = list(RT)
 
+            # initialize flag that indicates of the current sequence is valid for training
+            flag = True
+
             # iterate over each sequence position and replace amino acid in the consensus sequence with the recorded
             # mutation
             for i in range(mut_start, mut_start + 240):
 
-                # skip each position without a recorded mutation
-                if tmp[i] == '-':
+                # set flag to false if unexpected information is stored for the current sequence
+                if len(tmp[i]) != 1 or tmp[i] == '.':
+                    flag = False
                     continue
 
-                seq[i - mut_start] = tmp[i]
+                # exchange the consensus amino acid, if a mutation is recorded at position i of the current sequence
+                elif tmp[i] != '-':
+                    seq[i - mut_start] = tmp[i]
 
             # write id string and sequence to the output fasta file
-            f_out.write(id_string + '\n')
-            f_out.write(''.join(seq) + '\n')
+            if flag:
+                f_out.write(id_string + '\n' + ''.join(seq) + '\n')
 
     # close the output file
     f_out.close()
@@ -214,19 +226,25 @@ def create_fasta_nnrti():
             # create string to store isolate's sequence
             seq = list(RT)
 
+            # initialize flag that indicates of the current sequence is valid for training
+            flag = True
+
             # iterate over each sequence position and replace amino acid in the consensus sequence with the recorded
             # mutation
             for i in range(mut_start, mut_start + 240):
 
-                # skip each position without a recorded mutation
-                if tmp[i] == '-':
+                # set flag to false if unexpected information is stored for the current sequence
+                if len(tmp[i]) != 1 or tmp[i] == '.':
+                    flag = False
                     continue
 
-                seq[i - mut_start] = tmp[i]
+                # exchange the consensus amino acid, if a mutation is recorded at position i of the current sequence
+                elif tmp[i] != '-':
+                    seq[i - mut_start] = tmp[i]
 
             # write id string and sequence to the output fasta file
-            f_out.write(id_string + '\n')
-            f_out.write(''.join(seq) + '\n')
+            if flag:
+                f_out.write(id_string + '\n' + ''.join(seq) + '\n')
 
     # close the output file
     f_out.close()
