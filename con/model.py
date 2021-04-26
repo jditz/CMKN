@@ -724,7 +724,7 @@ class TestCON(nn.Module):
         self.layer.initialize_weights()
 
 
-class CON(nn.Module):
+class CON_bernhard(nn.Module):
     """Convolutional Oligo Kernel Network
     """
 
