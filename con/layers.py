@@ -37,7 +37,8 @@ class CONLayer(nn.Conv1d):
                         :type out_channels: Integer
                     :param kmer_length: Length of the oligomers investigated (aka the kernel size of the convolutional layer)
                         :type kmer_length: Integer
-                    :param padding:
+                    :param padding: Used padding type
+                        :type padding: String or Integer
                     :param dilation: Controls the spacing between the kernel points; also known as the à trous algorithm
                         :type dilation: Integer (Default: 1)
                     :param groups: Controls the connections between inputs and outputs
@@ -48,15 +49,13 @@ class CONLayer(nn.Conv1d):
                         :type kernel_func: String (Default: "exp_oli")
                     :param kernel_args: All parameters of the kernel function. The parameters have to be given in the order
                                         [sigma, scale, alpha].
-                        :type kernel_args: List (Default: [1, 1, 10000])
+                        :type kernel_args: Tuple (Default: (1, 1, 1))
                     :param kernel_args_trainable: Specifies if the kernel arguments are trainable
                         :type kernel_args_trainable: Boolean
         """
         # set padding parameter dependent on the selected padding type
         if padding == "SAME":
             padding = (kmer_length - 1) // 2
-        elif isinstance(padding, int):
-            pass
         else:
             padding = 0
 
@@ -92,7 +91,7 @@ class CONLayer(nn.Conv1d):
         # select the chosen kernel function from the dictionary that maps to all available functions
         kernel_func = kernels[kernel_func]
         # for convenient's sake, initialize a simple-to-use handler for the kernel function
-        self.kappa = lambda x, y: kernel_func(x, y, *self.kernel_args)
+        self.kappa = lambda x, y: kernel_func(x, y, kmer_length, *self.kernel_args)
 
         # set the kernel function used for computing the linear transformation factor
         kernel_func_lintrans = kernels["exp"]
@@ -206,29 +205,40 @@ class CONLayer(nn.Conv1d):
 
         return lintrans
 
-    def _conv_layer(self, x_in, oli_in):
+    def _conv_layer(self, x_in):
         """Convolution layer
 
         This layer computes the convolution: x_out = <phi(p), phi(Z)> * kappa(Zt p)
 
         - **Parameters**::
 
-            :param x_in: 2-dimensional encoding of the input positions
+            :param x_in: Oligomer encoding of the input sequence
                 :type x_in: Tensor (batch_size x in_channels x |S|)
-            :param oli_in: Oligomer encoding of the input sequence
-                :type oli_in: Tensor (batch_size x in_channels x |S|)
 
         - **Returns**::
 
             :return x_out: Result of the convolution
                 :rtype x_out: Tensor (batch_size x out_channels x |S|)
         """
-        # calculate the convolution between input and anchor points
-        x_out = super(CONLayer, self).forward(oli_in)
+        # build the position tensor
+        #   -> this tensor is only dependent on the length of the input sequence, therefore it can be created in the
+        #      forward call and doesn't have to be given as an argument
+        pos_in = x_in.new_zeros(x_in.size(0), 2, x_in.size(-1))
+        for i in range(x_in.size(-1)):
+            # project current position on the upper half of the unit circle
+            x_circle = np.cos(((i + 1) / x_in.size(-1)) * np.pi)
+            y_circle = np.sin(((i + 1) / x_in.size(-1)) * np.pi)
+
+            # fill the input tensor
+            pos_in[:, 0, i] = x_circle
+            pos_in[:, 1, i] = y_circle
+
+        # calculate the convolution between oligomer encoding of the input and oligomer encoding of the anchor points
+        x_out = super(CONLayer, self).forward(x_in)
         #aux1 = super(CONLayer, self).forward(x_in)
 
-        # calculate convolution between oligomer encoding of the input and oligomer encoding of the anchor points
-        pos_out = F.conv1d(x_in, self.pos_anchors, padding=self.padding, dilation=self.dilation, groups=self.groups)
+        # calculate convolution between positions of the input sequence and anchor point positions
+        pos_out = F.conv1d(pos_in, self.pos_anchors, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
         # evaluate kernel function with the result
         x_out = self.kappa(pos_out, x_out)
@@ -236,25 +246,13 @@ class CONLayer(nn.Conv1d):
         #bsize = x_in.shape[0]
         #torch.save({'posConv{}'.format(bsize): aux, 'oliConv{}'.format(bsize): oli_out, 'kappa{}'.format(bsize): x_out},
         #           'data/debug/convLayer_tensors_batchsize{}.pkl'.format(bsize))
-        #fig, axs = plt.subplots(4)
+        #fig, axs = plt.subplots()
         #im1 = axs[0].imshow(aux1[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
         #im2 = axs[1].imshow(pos_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
-        #axs[2].imshow(pos_out[0, :, :].detach().numpy() == 1, interpolation=None, aspect='auto')
         #im3 = axs[3].imshow(x_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
         #fig.colorbar(im1, ax=axs[0])
         #fig.colorbar(im2, ax=axs[1])
         #fig.colorbar(im3, ax=axs[3])
-
-        #anchors = [int(Decimal((np.arccos(anchor[0].item()) / np.pi) * (pos_out.shape[-1] - 1)).quantize(Decimal('1.'),
-        #                                                                                       rounding=ROUND_HALF_DOWN)
-        #               )
-        #           for anchor in self.weight]
-        #print('')
-        #print(anchors)
-        #print('')
-        #plt.figure()
-        #plt.imshow(oli_out[0, :, :].detach().numpy() == 1, interpolation=None, aspect='auto')
-        #plt.title('[]'.format(anchors))
         #plt.show()
 
         return x_out

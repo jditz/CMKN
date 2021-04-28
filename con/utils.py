@@ -798,7 +798,7 @@ def add_exp(x, alpha):
     return 0.5 * (exp_func2(x, alpha) + x)
 
 
-def exp_oli(x, y, sigma=1, scale=1, alpha=10000):
+def exp_oli(x, y, length=1, sigma=1, scale=1, alpha=10000):
     """Exponential activation function for the oligo layer
 
     This helper function implements the exponential activation function used in the oligo layer kernel function
@@ -810,6 +810,8 @@ def exp_oli(x, y, sigma=1, scale=1, alpha=10000):
             :type x: Tensor
         :param y: Input (convolution of oligomer encoding tensors) to the oligo kernel function
             :type y: Tensor
+        :param length: Length of the oligomers.
+            :type length: Int
         :param sigma: Degree of positional uncertainty.
             :type sigma: Float
         :param scale: Scaling parameter to accommodate for the oligo kernel network formulation.
@@ -821,7 +823,7 @@ def exp_oli(x, y, sigma=1, scale=1, alpha=10000):
 
         :returns same shape tensor as x
     """
-    return torch.exp((alpha**2 * (y-1.)) + (scale/(2*sigma**2) * (x-1.)))
+    return torch.exp((alpha**2 * (y-length)) + (scale/(2*sigma**2) * (x-1.)))
 
 
 # dictionary for easy mapping of kernel functions
