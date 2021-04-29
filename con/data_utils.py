@@ -204,19 +204,23 @@ class CONDataset(data.Dataset):
 
         if self.ext == "fasta":
             # parse input data
-            self.data = list(SeqIO.parse(filepath, ext))
+            aux = list(SeqIO.parse(filepath, ext))
 
             # check if all sequences have the same length
             #   -> store length if true, raise exception otherwise
-            if all(len(x.seq) == len(self.data[0].seq) for x in self.data):
-                self.seq_len = len(self.data[0].seq)
+            if all(len(x.seq) == len(aux[0].seq) for x in aux):
+                self.seq_len = len(aux[0].seq)
             else:
                 raise ValueError('Sequences are of different length!')
 
             # clean dataset of invalid samples iff the file is fasta-ish and a cleaning criterion, i.e. the column of
             # the id string that holds the class label information, is provided
-            if clean_set is not None and ext == "fasta":
-                self.data = [i for i in self.data if i.id.split('|')[clean_set[0]] != clean_set[1]]
+            if clean_set is not None:
+                self.data = [i.seq for i in aux if i.id.split('|')[clean_set[0]] != clean_set[1]]
+                self.labels = [i.id for i in aux if i.id.split('|')[clean_set[0]] != clean_set[1]]
+            else:
+                self.data = [i.seq for i in aux]
+                self.labels = [i.id for i in aux]
 
         elif self.ext == "seq.gz":
             # make sure that the alphabet is given in the correct format
@@ -281,7 +285,8 @@ class CONDataset(data.Dataset):
         return self.encode_function(idx)
 
     def _encode_onehot(self, idx):
-        """This function encodes oligomer starting information of each extracted sample as a one-hot encoding vector
+        """This function encodes sequences as one-hot encoding matrices, where each column is a one-hot encoding vector
+        of the letter starting at that position.
 
         - **Parameters**::
 
@@ -294,67 +299,24 @@ class CONDataset(data.Dataset):
         # perform different sample extraction depending on whether a list of indices is given or not
         try:
             # initialize data tensor
-            data_tensor = torch.zeros(len(idx), len(self.kmer_dict), self.seq_len)
+            data_tensor = torch.zeros(len(idx), len(ALPHABETS[self.alphabet][0]), self.seq_len)
 
             # fill the data tensor
             for i, sample in enumerate(idx):
-                # create list of k-mer positions in the current sequence for each k-mer over the alphabet
-                #     -> raise exception if one of the sequences is not created with the specified alphabet
-                try:
-                    if self.ext == 'fasta':
-                        positions = find_kmer_positions(self.data[sample].seq.upper(), self.kmer_dict, self.kmer_size)
-                    elif self.ext == 'seq.gz':
-                        positions = find_kmer_positions(self.data[sample], self.kmer_dict, self.kmer_size)
-                except ValueError:
-                    raise
-
-                # iterate over all kmers
-                for kmer, j in self.kmer_dict.items():
-
-                    # for each kmer, iterate over all occurrences and update data tensor, accordingly
-                    for pos in positions[j]:
-
-                        if len(idx) == 1:
-                            data_tensor[j, pos] = 1
-                        else:
-                            data_tensor[i, j, pos] = 1
+                # create one-hot encoding matrix for the requested sequence
+                data_tensor[i, :, :] = [[0 if char != letter else 1 for char in self.data[sample]] for letter in
+                                        ALPHABETS[self.alphabet][0]]
 
             # return data tensor and id string
-            if self.ext == 'fasta':
-                sample = (data_tensor, [self.data[i].id for i in idx])
-            elif self.ext == 'seq.gz':
-                sample = (data_tensor, [self.labels[i] for i in idx])
-            else:
-                sample = None
+            sample = (data_tensor, [self.labels[i] for i in idx])
 
         except TypeError:
-            # initialize data tensor
-            data_tensor = torch.zeros(len(self.kmer_dict), self.seq_len)
-
-            # create list of k-mer positions in the current sequence for each k-mer over the alphabet
-            #     -> raise exception if one of the sequences is not created with the specified alphabet
-            try:
-                if self.ext == 'fasta':
-                    positions = find_kmer_positions(self.data[idx].seq.upper(), self.kmer_dict, self.kmer_size)
-                elif self.ext == 'seq.gz':
-                    positions = find_kmer_positions(self.data[idx], self.kmer_dict, self.kmer_size)
-            except ValueError:
-                raise
-
-            # iterate over all kmers
-            for kmer, j in self.kmer_dict.items():
-
-                # for each kmer, iterate over all occurrences and update data tensor, accordingly
-                for pos in positions[j]:
-                    data_tensor[j, pos] = 1
+            # create one-hot encoding of requested sequence
+            data_tensor = torch.tensor([[0 if char != letter else 1 for char in self.data[idx]] for letter in
+                                        ALPHABETS[self.alphabet][0]])
 
             # return data tensor and id string
-            if self.ext == 'fasta':
-                sample = (data_tensor, [self.data[idx].id])
-            elif self.ext == 'seq.gz':
-                sample = (data_tensor, [self.labels[idx]])
-            else:
-                sample = None
+            sample = (data_tensor, self.labels[idx])
 
         return sample
 
@@ -379,22 +341,13 @@ class CONDataset(data.Dataset):
             for i, sample in enumerate(idx):
                 # calculate the continuous encoding of the current samples
                 try:
-                    if self.ext == 'fasta':
-                        data_tensor[i, :, :] = oli2number(self.data[sample].seq.upper(), self.kmer_dict,
-                                                          self.kmer_size, ambi=self.alphabet.split('_')[0])
-                    elif self.ext == 'seq.gz':
-                        data_tensor[i, :, :] = oli2number(self.data[sample], self.kmer_dict, self.kmer_size,
-                                                          ambi=self.alphabet.split('_')[0])
+                    data_tensor[i, :, :] = oli2number(self.data[sample], self.kmer_dict, self.kmer_size,
+                                                      ambi=self.alphabet.split('_')[0])
                 except ValueError:
                     raise
 
             # return data tensor and id string
-            if self.ext == 'fasta':
-                sample = (data_tensor, [self.data[i].id for i in idx])
-            elif self.ext == 'seq.gz':
-                sample = (data_tensor, [self.labels[i] for i in idx])
-            else:
-                sample = None
+            sample = (data_tensor, [self.labels[i] for i in idx])
 
         except TypeError:
             # initialize data tensor
@@ -402,23 +355,14 @@ class CONDataset(data.Dataset):
 
             # calculate the continuous encoding of the current sample
             try:
-                if self.ext == 'fasta':
-                    data_tensor = oli2number(self.data[idx].seq.upper(), self.kmer_dict, self.kmer_size,
-                                             ambi=self.alphabet.split('_')[0])
-                elif self.ext == 'seq.gz':
-                    data_tensor = oli2number(self.data[idx], self.kmer_dict, self.kmer_size,
-                                             ambi=self.alphabet.split('_')[0])
+                data_tensor = oli2number(self.data[idx], self.kmer_dict, self.kmer_size,
+                                         ambi=self.alphabet.split('_')[0])
 
             except ValueError:
                 raise
 
             # return data tensor and id string
-            if self.ext == 'fasta':
-                sample = (data_tensor, [self.data[idx].id])
-            elif self.ext == 'seq.gz':
-                sample = (data_tensor, [self.labels[idx]])
-            else:
-                sample = None
+            sample = (data_tensor, [self.labels[idx]])
 
         return sample
 

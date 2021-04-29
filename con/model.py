@@ -783,8 +783,8 @@ class CON(nn.Module):
         #   -> therefore, raise an AssertionError if the lengths differ
         if not len(out_channels_list) == len(strides) == len(filter_sizes) == len(paddings):
             raise ValueError('Incompatible dimensions! \n'
-                             '            out_channels_list and strides have to be of same length while filter_sizes '
-                             'and paddings have to be one entry shorter than the other two.')
+                             '            out_channels_list, filter_sizes, strides and paddings must have the same '
+                             'length!')
 
         # initialize parent class
         super(CON, self).__init__()
