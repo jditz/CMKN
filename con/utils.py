@@ -310,7 +310,7 @@ def build_kmer_ref_from_list(seq_list, kmer_dict, kmer_size):
     return ref_pos / data_size
 
 
-def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino", outdir=""):
+def anchors_to_motivs(anchor_points, positions, type="DNA_FULL", outdir=""):
     """Motiv creation
 
     This function takes a list of anchor points, learned by the oligo kernel layer of a CON, and returns the motivs that
@@ -320,12 +320,11 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
 
     - **Parameters**::
 
-        :param anchor_points: List of anchor points, learned by an oligo kernel layer
-            :type anchor_points: List of floats
-        :param kmer_ref: Tensor storing the frequency with which every k-mer starts at each position in the dataset
-            :type kmer_ref: Tensor
-        :param kmer_dict: Dictionary mapping each k-mer to an index
-            :type kmer_dict: Dictionary
+        :param anchor_points: Tensor containing the oligomers corresponding to each anchor points, learned by an oligo
+                              kernel layer (i.e. the tensor that can be accessed by model.oligo.weight)
+            :type anchor_points: Tensor
+        :param positions: List of positions of each oligomer
+            :type positions: List
     """
     # import needed libraries
     import matplotlib as mpl
@@ -334,10 +333,12 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
     from matplotlib.font_manager import FontProperties
     import matplotlib.pyplot as plt
 
+    from .data_utils import ALPHABETS
+
     # initialize needed functionality
     fp = FontProperties(family="Arial", weight="bold")
     globscale = 1.35
-    if type == 'nucleotides':
+    if type.split('_')[0] == 'DNA':
         LETTERS = {"T": TextPath((-0.305, 0), "T", size=1, prop=fp),
                    "G": TextPath((-0.384, 0), "G", size=1, prop=fp),
                    "U": TextPath((-0.384, 0), "U", size=1, prop=fp),
@@ -348,7 +349,7 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
                         'C': 'blue',
                         'T': 'red',
                         'U': 'red'}
-    elif type == 'amino':
+    elif type.split('_')[0] == 'PROTEIN':
         LETTERS = {"G": TextPath((-0.384, 0), "G", size=1, prop=fp),
                    "S": TextPath((-0.366, 0), "S", size=1, prop=fp),
                    "T": TextPath((-0.305, 0), "T", size=1, prop=fp),
@@ -405,57 +406,24 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
         return p
 
     # iterate through the anchor points
-    for anchor in anchor_points:
+    for anchor in range(anchor_points.shape[0]):
         # initialize list that will store tuples of (sequence, scale)
         #   -> these are all sequences involved in the motiv with their corresponding scale variable
         all_scores = []
 
-        # get ref positions involved in the motiv
-        weight1, pos1 = math.modf(anchor)
-        pos1 = int(pos1)
-        pos2 = pos1 + 1
-        weight2 = 1 - weight1
+        # iterate over the length of the oligomer
+        for pos in range(anchor_points.shape[2]):
+            # all characters contributing to the current oligomer position will be stored as a list of
+            # (character, scale)-tupels
+            scores = []
 
-        # iterate over all kmer positions
-        for i in range(kmer_size):
-            # add empty list to seqs; this will store all letters and weights for the ith position of the motif
-            all_scores.append([])
+            # iterate over all characters in the alphabet and check if they contribute to the current position of the
+            # anchor oligomer
+            for char in range(anchor_points.shape[1]):
+                if anchor_points[anchor, char, pos] != 0:
+                    scores.append((ALPHABETS[type][0][char], anchor_points[anchor, char, pos]))
 
-            # iterate over all kmers starting at pos1
-            for idx_kmer in torch.nonzero(kmer_ref[:, pos1], as_tuple=False):
-                # get the sequence corresponding to the index
-                kmer_seq = list(kmer_dict.keys())[list(kmer_dict.values()).index(idx_kmer)]
-
-                # get the weight of this specific kmer
-                kmer_weight = kmer_ref[idx_kmer, pos1].item() * weight1
-
-                # store sequence and weight as tuple
-                does_exist = False
-                for j in range(len(all_scores[i])):
-                    if all_scores[i][j][0] == list(kmer_seq)[i]:
-                        all_scores[i][j] = (list(kmer_seq)[i], all_scores[i][j][1] + kmer_weight)
-                        does_exist = True
-
-                if not does_exist:
-                    all_scores[i].append((list(kmer_seq)[i], kmer_weight))
-
-            # iterate over all kmers starting at pos2
-            for idx_kmer in torch.nonzero(kmer_ref[:, pos2], as_tuple=False):
-                # get the sequence corresponding to the index
-                kmer_seq = list(kmer_dict.keys())[list(kmer_dict.values()).index(idx_kmer)]
-
-                # get the weight of this specific kmer
-                kmer_weight = kmer_ref[idx_kmer, pos2].item() * weight2
-
-                # store sequence and weight as tuple but make sure that letters are not duplicated
-                does_exist = False
-                for j in range(len(all_scores[i])):
-                    if all_scores[i][j][0] == list(kmer_seq)[i]:
-                        all_scores[i][j] = (list(kmer_seq)[i], all_scores[i][j][1] + kmer_weight)
-                        does_exist = True
-
-                if not does_exist:
-                    all_scores[i].append((list(kmer_seq)[i], kmer_weight))
+            all_scores.append(scores)
 
         fig, ax = plt.subplots(figsize=(10, 3))
 
@@ -473,7 +441,7 @@ def anchors_to_motivs(anchor_points, kmer_ref, kmer_dict, kmer_size, type="amino
         plt.xlim((0, x))
         plt.ylim((0, maxi))
         plt.tight_layout()
-        plt.savefig(outdir + "/motif_anchor_" + str(anchor) + ".png")
+        plt.savefig(outdir + "/motif_anchor_" + str(positions[anchor]).zfill(3) + ".png")
         plt.close(fig)
 
 
@@ -1119,7 +1087,7 @@ def spherical_kmeans(x, n_clusters, max_iters=100, verbose=True,
         tmp, assign = cos_sim.max(dim=-1)
         sim = tmp.mean()
         if (n_iter + 1) % 10 == 0 and verbose:
-            print("Spherical kmeans iter {}, objective value {}".format(
+            print("        Spherical kmeans iter {}, objective value {}".format(
                 n_iter + 1, sim))
 
         # update clusters

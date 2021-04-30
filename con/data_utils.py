@@ -17,7 +17,7 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch.utils import data
 
-from .utils import kmer2dict, find_kmer_positions, oli2number
+from .utils import kmer2dict, oli2number
 
 if sys.version_info < (3,):
     import string
@@ -313,10 +313,10 @@ class CONDataset(data.Dataset):
         except TypeError:
             # create one-hot encoding of requested sequence
             data_tensor = torch.tensor([[0 if char != letter else 1 for char in self.data[idx]] for letter in
-                                        ALPHABETS[self.alphabet][0]])
+                                        ALPHABETS[self.alphabet][0]], dtype=torch.float)
 
             # return data tensor and id string
-            sample = (data_tensor, self.labels[idx])
+            sample = (data_tensor, [self.labels[idx]])
 
         return sample
 
@@ -350,9 +350,6 @@ class CONDataset(data.Dataset):
             sample = (data_tensor, [self.labels[i] for i in idx])
 
         except TypeError:
-            # initialize data tensor
-            data_tensor = torch.zeros(2, self.seq_len)
-
             # calculate the continuous encoding of the current sample
             try:
                 data_tensor = oli2number(self.data[idx], self.kmer_dict, self.kmer_size,

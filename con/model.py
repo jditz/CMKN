@@ -768,9 +768,11 @@ class CON(nn.Module):
             :param penalty: Indicates which penalty method should be used for regularization in the classification layer
                             (only used if the classfication layer is a LinearMax layer)
                 :type penalty: String (Default: 'l2')
-            :param scaler: Specifies which scaler will be used, e.g. standard_row. Set to None if a fully connected
-                           layer should be used for classification
-                :type scaler: String (Default: None)
+            :param scaler: If set to a String, a LinearMixin layer will be used for classification and the String
+                           specifies the used scalar, e.g. 'standard_row'. If set to an Integer, a standard fully
+                           connected layer will be used for classification and the Integer determines the input
+                           dimensionality of that layer.
+                :type scaler: String or Integer
             :param num_classes: Number of classes in the current classification problem
                 :type num_classes: Integer
 
@@ -828,8 +830,8 @@ class CON(nn.Module):
                 # initialize the "normal" convolutional layers
                 #   -> ATTENTION: in_channels is equal to the number of output channels of the previous layer
                 convlayers.append(
-                    nn.Conv1d(out_channels_list[i - 1], out_channels_list[i], kernel_size=filter_sizes[i - 1],
-                              stride=1, padding=padding))
+                    nn.Conv1d(out_channels_list[i], out_channels_list[i], kernel_size=filter_sizes[i],
+                              stride=strides[i], padding=padding))
 
                 # perform batch normalization after each conv layer (if set to True)
                 if batch_norm:
@@ -849,11 +851,25 @@ class CON(nn.Module):
             # combine convolutional oligo kernel layer and all "normal" conv layers into a Sequential layer
             self.conv = nn.Sequential(*convlayers)
 
-        if pool_global is None:
-            # set the number of output features
-            #   -> this is the number of output channels of the last CON layer multiplied by the sequence length
-            self.out_features = out_channels_list[-1] * self.seq_len
-            self.global_pool = None
+        # Initialization of pooling and classification layer; use a standard fully connected layer if scaler is an
+        # Integer. Furthermore, use two fully connected layers for more stability, if no global pooling layer is used.
+        if isinstance(scaler, int):
+            if pool_global is None:
+                # set the number of output features
+                #   -> this is the number of output channels of the last CON layer multiplied by the sequence length
+                self.out_features = out_channels_list[-1] * scaler
+                self.global_pool = None
+
+                # initialize two FC layer for stability reason, since no global pooling layer is used
+                self.fc = nn.Linear(self.out_features, self.num_classes * 100, bias=fit_bias)
+                self.classifier = nn.Linear(self.num_classes * 100, self.num_classes, bias=fit_bias)
+            else:
+                # set the number of output features
+                #   -> this is the number of output channels of the last CON layer
+                self.out_features = out_channels_list[-1]
+
+                # initialize fully connected linear layer
+                self.classifier = nn.Linear(self.out_features, self.num_classes, bias=fit_bias)
         else:
             # set the specified global pooling layer
             self.global_pool = POOLINGS[pool_global]()
@@ -862,15 +878,7 @@ class CON(nn.Module):
             #   -> this is the number of output channels of the last CON layer
             self.out_features = out_channels_list[-1]
 
-        # initialize the classification layer; use a standard fully connected layer if scaler is set to None.
-        # Furthermore, use two fully connected layers for more stability, of no global pooling layer is used.
-        if scaler is None:
-            if pool_global is None:
-                self.fc = nn.Linear(self.out_features, self.num_classes * 100, bias=fit_bias)
-                self.classifier = nn.Linear(self.num_classes * 100, self.num_classes, bias=fit_bias)
-            else:
-                self.classifier = nn.Linear(self.out_features, self.num_classes, bias=fit_bias)
-        else:
+            # initialize the scaler and LinearMixin layer
             self.initialize_scaler(scaler)
             self.classifier = LinearMax(self.out_features, self.num_classes, alpha=alpha, fit_bias=fit_bias,
                                         penalty=penalty)
@@ -1052,7 +1060,7 @@ class CON(nn.Module):
             self.cuda()
 
         # initialize the Oligo Kernel layer
-        print('Initializing Oligo Kernel Layer')
+        print('    Initializing Oligo Kernel Layer')
         n_oligomers = 0
 
         # determine the number of oligomers sampled from each batch
@@ -1093,7 +1101,7 @@ class CON(nn.Module):
             n_oligomers += size
 
         # initialize the oligomer and position anchor points of the Oligo Kernel layer
-        print('    total number of sampled oligomers: {}'.format(n_oligomers))
+        print('        total number of sampled oligomers: {}'.format(n_oligomers))
         self.oligo.initialize_weights(seq_len, oligomers, init)
 
         # iterate over all convolutional layers
@@ -1102,7 +1110,7 @@ class CON(nn.Module):
 
                 # initialize the convolutional layer
                 if isinstance(layer, nn.Conv1d):
-                    print("Initializing layer {} (conv layer)...".format(i + 1))
+                    print("    Initializing layer {} (conv layer)...".format(i + 1))
 
                     # initializing weights using the He initialization (also called Kaiming initialization)
                     #   -> only use this initialization if ReLU activation is used
@@ -1153,9 +1161,11 @@ class CON(nn.Module):
         # initialize the anchor points of all layers that use anchor points in an unsupervised fashion and initialize
         # weights of all convolutional layers
         if init_train_loader is not None:
-            self.initialize(init_train_loader, seq_len, n_sampling_olis, kmeans_init, use_cuda)
+            self.initialize(init_train_loader, seq_len=seq_len, n_sampling_olis=n_sampling_olis,
+                            init=kmeans_init, use_cuda=use_cuda)
         else:
-            self.initialize(train_loader, seq_len, n_sampling_olis, kmeans_init, use_cuda)
+            self.initialize(train_loader, seq_len=seq_len, n_sampling_olis=n_sampling_olis,
+                            init=kmeans_init, use_cuda=use_cuda)
 
         toc = timer()
         print("Finished, elapsed time: {:.2f}min\n".format((toc - tic) / 60))
@@ -1287,6 +1297,8 @@ class CON(nn.Module):
                 list_acc[phase].append(epoch_acc)
                 list_loss[phase].append(epoch_loss)
                 print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
+
+                anchors = []
 
                 # deep copy the model
                 if (phase == 'val') and epoch_loss < best_loss:

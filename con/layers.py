@@ -110,7 +110,7 @@ class CONLayer(nn.Conv1d):
 
         - **Returns**::
 
-            patches: (batch_size x (H - filter_size + 1)) x (in_channels x filter_size)
+            oligomers: (batch_size x (H - filter_size + 1)) x (in_channels x filter_size)
         """
         oligomers = x_in.unfold(-1, self.filter_size, 1).transpose(1, 2)
         oligomers = oligomers.contiguous().view(-1, self.patch_dim)
@@ -246,13 +246,17 @@ class CONLayer(nn.Conv1d):
         #bsize = x_in.shape[0]
         #torch.save({'posConv{}'.format(bsize): aux, 'oliConv{}'.format(bsize): oli_out, 'kappa{}'.format(bsize): x_out},
         #           'data/debug/convLayer_tensors_batchsize{}.pkl'.format(bsize))
-        #fig, axs = plt.subplots()
+        #fig, axs = plt.subplots(3)
         #im1 = axs[0].imshow(aux1[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
         #im2 = axs[1].imshow(pos_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
-        #im3 = axs[3].imshow(x_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
+        #im3 = axs[2].imshow(x_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
         #fig.colorbar(im1, ax=axs[0])
         #fig.colorbar(im2, ax=axs[1])
-        #fig.colorbar(im3, ax=axs[3])
+        #fig.colorbar(im3, ax=axs[2])
+        #plt.show()
+
+        #plt.figure()
+        #plt.imshow(self.weight.detach().numpy())
         #plt.show()
 
         return x_out
@@ -283,18 +287,16 @@ class CONLayer(nn.Conv1d):
             return torch.mm(x_in, lintrans)
         return torch.bmm(lintrans.expand(batch_size, out_c, out_c), x_in)
 
-    def forward(self, x_in, oli_in):
+    def forward(self, x_in):
         """Encode function for a CON layer
 
         - **Parameters**::
 
-            :param x_in: 2-dimensional encoding of the input positions
+            :param x_in: one-hot encoding of the input sequence
                 :type x_in: Tensor (batch_size x in_channels x |S|)
-            :param oli_in: Oligomer encoding of the input sequence
-                :type oli_in: Tensor (batch_size x in_channels x |S|)
         """
         # perform the convolution
-        x_out = self._conv_layer(x_in, oli_in)
+        x_out = self._conv_layer(x_in)
 
         # calculate the linear transformation factor (if needed)
         lintrans = self._compute_lintrans()
@@ -308,7 +310,8 @@ class CONLayer(nn.Conv1d):
         valid iff all weights are normalized (, point to discrete sequence positions,) and the corresponding oligomers
         are encoded by alphanet.weight.
         """
-        # make sure all oligomer anchor points have unit l2-norm
+        # make sure all oligomer anchor points are positive and have unit l2-norm
+        self.weight.data.clamp_(0)
         norm = self.weight.data.view(self.out_channels, -1).norm(p=2, dim=-1).view(-1, 1, 1)
         norm.clamp_(min=EPS)
         self.weight.data.div_(norm)
