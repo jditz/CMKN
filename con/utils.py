@@ -1071,13 +1071,16 @@ def spherical_kmeans(x, n_clusters, max_iters=100, verbose=True,
     use_cuda = x.is_cuda
     n_samples, n_features = x.size()
     if init == "kmeans++":
-        print(init)
+        print("        use initialization: {}".format(init))
         clusters = init_kmeans(x, n_clusters, use_cuda=use_cuda)
-    else:
+    elif init is None:
+        print("        use initialization: {}".format(init))
         indices = torch.randperm(n_samples)[:n_clusters]
         if use_cuda:
             indices = indices.cuda()
         clusters = x[indices]
+    else:
+        raise ValueError("Unknown initialization procedure: {}".format(init))
 
     prev_sim = np.inf
 

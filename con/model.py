@@ -1072,7 +1072,7 @@ class CON(nn.Module):
             n_oligomers_per_batch = 1000
 
         # initialize tensor that stores the sampled oligomers and make sure it is on the same device as the model
-        oligomers = self.oligo.weight.new_zeros(n_sampling_olis, self.oligo.patch_dim)
+        oligomers = self.oligo.weight.new_zeros(n_sampling_olis, self.oligo.patch_dim + 1)
 
         # get batches using the DataLoader object
         for data, _ in data_loader:
@@ -1297,8 +1297,6 @@ class CON(nn.Module):
                 list_acc[phase].append(epoch_acc)
                 list_loss[phase].append(epoch_loss)
                 print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
-
-                anchors = []
 
                 # deep copy the model
                 if (phase == 'val') and epoch_loss < best_loss:

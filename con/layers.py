@@ -97,7 +97,7 @@ class CONLayer(nn.Conv1d):
         kernel_func_lintrans = kernels["exp"]
         self.kappa_lintrans = lambda x: kernel_func_lintrans(x, *self.kernel_args[0:2])
 
-    def sample_oligomers(self, x_in, n_sampling_patches=1000):
+    def sample_oligomers(self, x_in, n_sampling_oligomers=1000):
         """Sample oligomers from the given Tensor. These oligomers will be used as input to the spherical k-Means
         algorithm that is used during initialization of the network.
 
@@ -105,21 +105,41 @@ class CONLayer(nn.Conv1d):
 
             :param x_in: One-hot encoding representation of a sequence
                 :type x_in: Tensor (batch_size x self.in_channels x seq_len)
-            :param n_sampling_patches: Number of patches to sample
-                :type n_sampling_patches: Integer
+            :param n_sampling_oligomers: Number of patches to sample
+                :type n_sampling_oligomers: Integer
 
         - **Returns**::
 
             oligomers: (batch_size x (H - filter_size + 1)) x (in_channels x filter_size)
         """
+        # unfold the input tensor to create oligomers of the desired length
         oligomers = x_in.unfold(-1, self.filter_size, 1).transpose(1, 2)
+
+        # flatten the one-hot encodings of each oligomer and combine batch size and sequence length into a single
+        # dimension
+        #   -> this allows to easily sample oligomers of the desired length across the batch and the whole length of
+        #      the sequence
         oligomers = oligomers.contiguous().view(-1, self.patch_dim)
 
-        n_sampling_patches = min(oligomers.size(0), n_sampling_patches)
+        # add positional information to each oligomer
+        #   -> since the contiguous() function will put the sorted oligomers of each input sequence next to each other,
+        #      we can still add the positional information to each oligomer by simply replicating the list
+        #      [0 : sequence_length] a number of times equal to the batch size and concatenate this tensor with the
+        #      oligomer tensor at dimension 1
+        pos_info = oligomers.new_tensor(list(range(x_in.shape[-1] - (self.filter_size - 1))) * x_in.shape[0])
+        oligomers = torch.cat([oligomers, pos_info.view(-1, 1)], dim=1)
 
-        indices = torch.randperm(oligomers.size(0))[:n_sampling_patches]
+        # make sure to only sample at most the number of oligomers that are presented in the current batch
+        n_sampling_oligomers = min(oligomers.size(0), n_sampling_oligomers)
+
+        # sample random indices of the oligomer tensor (number of sampled indices is either the maximum number of
+        # oligomers or n_sampling_oligomers, whatever is smaller)
+        indices = torch.randperm(oligomers.size(0))[:n_sampling_oligomers]
         oligomers = oligomers[indices]
-        normalize_(oligomers)
+
+        # normalize the oligomers but keep the positional information unchanged
+        #normalize_(oligomers)
+        normalize_(oligomers[:, :-1])
         return oligomers
 
     def initialize_weights(self, seq_len, oligomers, init=None):
@@ -144,29 +164,17 @@ class CONLayer(nn.Conv1d):
             self.weight (out_channels x in_channels): These represent the oligomer anchor points
             self.pos_anchors (out_channels x 2): These represent the encoded position anchor points
         """
-        # get position anchor points that are equidistantly distributed over the whole sequence
-        dist = seq_len / self.out_channels
-        positions = [dist / 2 + i * dist for i in range(self.out_channels)]
-
-        # initialize weight tensor
-        pos_tensor = self.pos_anchors.new_zeros([self.out_channels, 2])
-
-        # fill the tensor by projecting anchor point positions onto the upper half of the unit circle
-        for i in range(self.out_channels):
-            # calculate the x coordinate
-            pos_tensor[i, 0] = np.cos((positions[i] / seq_len) * np.pi)
-            pos_tensor[i, 1] = np.sin((positions[i] / seq_len) * np.pi)
-
-        # make sure that the layer weights and the auxiliary weight variable have the same shape
-        pos_tensor = pos_tensor.view_as(self.pos_anchors)
-
-        # update the layer weight
-        self.pos_anchors.data = pos_tensor.data
-        self._need_lintrans_computed = True
-
-        # initialize the oligomer anchor points unsing a spherical k-Means algorithm
+        print(oligomers[:200, -1])
+        # perform spherical kmeans algorithm on the given oligomer-position tensors
         oli_tensor = spherical_kmeans(oligomers, self.out_channels, init=init)
+
+        # seperate oligomers and positions
+        pos_tensor = oli_tensor[:, -1]
+        oli_tensor = oli_tensor[:, :-1]
+        print(pos_tensor[:10], oli_tensor[0, :], oligomers[:3, :])
+
         oli_tensor = oli_tensor.view_as(self.weight)
+        return
         self.weight.data = oli_tensor.data
 
     def train(self, mode=True):
