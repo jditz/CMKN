@@ -15,7 +15,7 @@ from decimal import Decimal, ROUND_HALF_DOWN
 from scipy import optimize
 from sklearn.linear_model._base import LinearModel, LinearClassifierMixin
 
-from .utils import kernels, gaussian_filter_1d, matrix_inverse_sqrt, spherical_kmeans, EPS, normalize_, ClassBalanceLoss
+from .utils import kernels, gaussian_filter_1d, matrix_inverse_sqrt, kmeans, EPS, normalize_, ClassBalanceLoss
 
 import matplotlib.pyplot as plt
 
@@ -97,7 +97,7 @@ class CONLayer(nn.Conv1d):
         kernel_func_lintrans = kernels["exp"]
         self.kappa_lintrans = lambda x: kernel_func_lintrans(x, *self.kernel_args[0:2])
 
-    def sample_oligomers(self, x_in, n_sampling_oligomers=1000):
+    def sample_oligomers(self, x_in, n_sampling_oligomers=1000, include_pos=False):
         """Sample oligomers from the given Tensor. These oligomers will be used as input to the spherical k-Means
         algorithm that is used during initialization of the network.
 
@@ -107,6 +107,8 @@ class CONLayer(nn.Conv1d):
                 :type x_in: Tensor (batch_size x self.in_channels x seq_len)
             :param n_sampling_oligomers: Number of patches to sample
                 :type n_sampling_oligomers: Integer
+            :param include_pos: Determine whether sampled oligomers should include positional information
+                :type include_pos: Boolean
 
         - **Returns**::
 
@@ -121,13 +123,15 @@ class CONLayer(nn.Conv1d):
         #      the sequence
         oligomers = oligomers.contiguous().view(-1, self.patch_dim)
 
-        # add positional information to each oligomer
+        # add positional information to each oligomer if requested
         #   -> since the contiguous() function will put the sorted oligomers of each input sequence next to each other,
         #      we can still add the positional information to each oligomer by simply replicating the list
         #      [0 : sequence_length] a number of times equal to the batch size and concatenate this tensor with the
         #      oligomer tensor at dimension 1
-        pos_info = oligomers.new_tensor(list(range(x_in.shape[-1] - (self.filter_size - 1))) * x_in.shape[0])
-        oligomers = torch.cat([oligomers, pos_info.view(-1, 1)], dim=1)
+        if include_pos:
+            pos_info = oligomers.new_tensor(list(range(x_in.shape[-1] - (self.filter_size - 1))) * x_in.shape[0])
+            pos_info = torch.cos((pos_info / x_in.shape[-1]) * np.pi)
+            oligomers = torch.cat([oligomers, pos_info.view(-1, 1)], dim=1)
 
         # make sure to only sample at most the number of oligomers that are presented in the current batch
         n_sampling_oligomers = min(oligomers.size(0), n_sampling_oligomers)
@@ -138,11 +142,11 @@ class CONLayer(nn.Conv1d):
         oligomers = oligomers[indices]
 
         # normalize the oligomers but keep the positional information unchanged
-        #normalize_(oligomers)
-        normalize_(oligomers[:, :-1])
+        if include_pos:
+            normalize_(oligomers)
         return oligomers
 
-    def initialize_weights(self, seq_len, oligomers, init=None):
+    def initialize_weights(self, distance, oligomers, seq_len, init=None, max_iters=100):
         """Initialization of CONLayer's weights and alphanet's weights
 
         The anchor points of the CON layer will be equidistantly distributed over the whole length of the sequence.
@@ -150,32 +154,51 @@ class CONLayer(nn.Conv1d):
 
         - **Parameters**::
 
-            :param seq_len: Length of the sequence. This parameter will be used to equidistantly distribute the position
-                            anchor points along the sequence.
-                :type seq_len: Integer
+            :param distance: Distance measure used in the k-Means algorithm
+                :type distance: String
             :param oligomers: Oligomers that will be used to initialize the oligomer anchor points using a spherical
                               k-Means algorithm
                 :type oligomers: Tensor (n_sampling_oligomers x self.patch_dim)
+            :param seq_len: Length of the sequences used as input to the initialization process
+                :type seq_len: Integer
             :param init: Initialization parameter for the spherical k-Means algorithm
                 :type init: String
+            :param max_iters: Maximal number of iterations used in the K-Means clustering
+                :type max_iters: Integer
 
         - **Updates**::
 
             self.weight (out_channels x in_channels): These represent the oligomer anchor points
             self.pos_anchors (out_channels x 2): These represent the encoded position anchor points
         """
-        print(oligomers[:200, -1])
         # perform spherical kmeans algorithm on the given oligomer-position tensors
-        oli_tensor = spherical_kmeans(oligomers, self.out_channels, init=init)
+        oli_tensor = kmeans(oligomers, self.out_channels, distance=distance, init=init, max_iters=max_iters)
 
         # seperate oligomers and positions
-        pos_tensor = oli_tensor[:, -1]
-        oli_tensor = oli_tensor[:, :-1]
-        print(pos_tensor[:10], oli_tensor[0, :], oligomers[:3, :])
+        if distance == 'euclidean':
+            pos_tensor = oli_tensor[:, -1]
+            oli_tensor = oli_tensor[:, :-1]
 
+            # convert position tensor into sequence positions
+            pos_tensor = (torch.acos(pos_tensor) / np.pi) * (seq_len - 1)
+        else:
+            dist = seq_len / self.out_channels
+            pos_tensor = oli_tensor.new_tensor([dist / 2 + i * dist for i in range(self.out_channels)])
+
+        # update the oligomer weights with the computed cluster centers
         oli_tensor = oli_tensor.view_as(self.weight)
-        return
         self.weight.data = oli_tensor.data
+
+        # convert sequence position into 2-dimensional vectors with unit l-2 norm
+        pos_anchors = self.pos_anchors.new_zeros(self.out_channels, 2)
+        for i in range(self.out_channels):
+            pos_anchors[i, 0] = torch.cos((pos_tensor[i] / seq_len) * np.pi)
+            pos_anchors[i, 1] = torch.sin((pos_tensor[i] / seq_len) * np.pi)
+
+        # update the position anchor points
+        pos_anchors = pos_anchors.view_as(self.pos_anchors)
+        self.pos_anchors.data = pos_anchors.data
+        self._need_lintrans_computed = True
 
     def train(self, mode=True):
         """ Toggle train mode

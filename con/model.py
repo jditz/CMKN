@@ -1033,21 +1033,22 @@ class CON(nn.Module):
         output.squeeze_(-1)
         return output, target_output
 
-    def initialize(self, data_loader, seq_len, n_sampling_olis=100000, init=None, use_cuda=False):
+    def initialize(self, data_loader, distance, n_sampling_olis=100000, init=None, max_iters=100, use_cuda=False):
         """ Function to initialize parameters of the network
 
         - **Parameters**::
 
             :param data_loader: PyTorch DataLoader object that handles access to training data
                 :type data_loader: torch.utils.data.DataLoader
-            :param seq_len: Sequence length used to initialize the position anchors. Anchors will be equidistantly
-                            distributed across the range of the sequence length.
-                :type seq_len: Integer
+            :param distance: Distance measure used in the k-Means algorithm
+                :type distance: String
             :param n_sampling_olis: Number of oligomers that will be sampled to initialize oligomer anchor points
                                        using the spherical k-Means algorithm
                 :type n_sampling_olis: Integer
             :param init: Initialization parameter for the spherical k-Means algorithm
                 :type init: String
+            :param max_iters: Maximal number of iterations used in the K-Means clustering
+                :type max_iters: Integer
             :param use_cuda: Parameter to determine whether to do calculations on the GPU or CPU.
                 :type use_cuda: Boolean
         """
@@ -1071,14 +1072,31 @@ class CON(nn.Module):
         except:
             n_oligomers_per_batch = 1000
 
-        # initialize tensor that stores the sampled oligomers and make sure it is on the same device as the model
-        oligomers = self.oligo.weight.new_zeros(n_sampling_olis, self.oligo.patch_dim + 1)
+        # depending on the chosen distance measure for the k-Means algorithm, oligomers will incorporate positional
+        # information
+        if distance == 'euclidean':
+            # initialize tensor that stores the sampled oligomers and make sure it is on the same device as the model
+            oligomers = self.oligo.weight.new_zeros(n_sampling_olis, self.oligo.patch_dim + 1)
+
+            # make sure that oligomers contain positional information
+            include_pos = True
+        else:
+            # initialize tensor that stores the sampled oligomers and make sure it is on the same device as the model
+            oligomers = self.oligo.weight.new_zeros(n_sampling_olis, self.oligo.patch_dim)
+
+            # make sure that oligomers will not contain positional information
+            include_pos = False
 
         # get batches using the DataLoader object
+        seq_len = None
         for data, _ in data_loader:
             # stop sampling oligomers if the maximum number of oligomers is already achieved
             if n_oligomers >= n_sampling_olis:
                 break
+
+            # get the length of the sequences; this will be needed later
+            if seq_len is None:
+                seq_len = data.shape[-1]
 
             # send data to GPU if use_cuda flag was set
             if use_cuda:
@@ -1086,7 +1104,7 @@ class CON(nn.Module):
 
             # sample the specified number of oligomers using the current batch of data
             with torch.no_grad():
-                data_oliogmers = self.oligo.sample_oligomers(data, n_oligomers_per_batch)
+                data_oliogmers = self.oligo.sample_oligomers(data, n_oligomers_per_batch, include_pos)
 
             # only use a subset of the sampled oligomers in this batch, if this batch would exceed the maximum number
             # of sampled oligomers
@@ -1102,7 +1120,7 @@ class CON(nn.Module):
 
         # initialize the oligomer and position anchor points of the Oligo Kernel layer
         print('        total number of sampled oligomers: {}'.format(n_oligomers))
-        self.oligo.initialize_weights(seq_len, oligomers, init)
+        self.oligo.initialize_weights(distance, oligomers, seq_len, init=init, max_iters=max_iters)
 
         # iterate over all convolutional layers
         if self.nb_conv_layers > 0:
@@ -1116,9 +1134,9 @@ class CON(nn.Module):
                     #   -> only use this initialization if ReLU activation is used
                     nn.init.kaiming_uniform_(layer.weight, mode='fan_in', nonlinearity='relu')
 
-    def sup_train(self, train_loader, criterion, optimizer, lr_scheduler=None, init_train_loader=None, seq_len=100,
-                  n_sampling_olis=100000, kmeans_init=None, epochs=100, val_loader=None, use_cuda=False,
-                  early_stop=True):
+    def sup_train(self, train_loader, criterion, optimizer, lr_scheduler=None, init_train_loader=None,
+                  distance='euclidean', n_sampling_olis=100000, kmeans_init=None, epochs=100, val_loader=None,
+                  use_cuda=False, early_stop=True):
         """ Perform supervised training of the CON model
 
         - **Parameters**::
@@ -1134,9 +1152,8 @@ class CON(nn.Module):
             :param init_train_loader: PyTorch DataLoader object that handles access to training data used during
                                       initialization of the Oligo Kernel layer.
                 :type init_train_loader: torch.utils.data.DataLoader
-            :param seq_len: Sequence length used to initialize the position anchors. Anchors will be equidistantly
-                            distributed across the range of the sequence length.
-                :type seq_len: Integer
+            :param distance: Distance measure used in the k-Means algorithm
+                :type distance: String
             :param n_sampling_olis: Number of oligomers that will be sampled to initialize oligomer anchor points
                                        using the spherical k-Means algorithm
                 :type n_sampling_olis: Integer
@@ -1161,10 +1178,10 @@ class CON(nn.Module):
         # initialize the anchor points of all layers that use anchor points in an unsupervised fashion and initialize
         # weights of all convolutional layers
         if init_train_loader is not None:
-            self.initialize(init_train_loader, seq_len=seq_len, n_sampling_olis=n_sampling_olis,
+            self.initialize(init_train_loader, distance=distance, n_sampling_olis=n_sampling_olis,
                             init=kmeans_init, use_cuda=use_cuda)
         else:
-            self.initialize(train_loader, seq_len=seq_len, n_sampling_olis=n_sampling_olis,
+            self.initialize(train_loader, distance=distance, n_sampling_olis=n_sampling_olis,
                             init=kmeans_init, use_cuda=use_cuda)
 
         toc = timer()

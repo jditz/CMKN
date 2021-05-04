@@ -1016,29 +1016,83 @@ def matrix_inverse_sqrt(input, eps=1e-2):
 
 
 #############################################################################
-# KMEANS+***
+# KMEANS/KMEANS++
 #############################################################################
 
+def _pairwise_distance(data1, data2=None):
+    """This function calculates the pairwise Euclidean distance between each sample in the given datasets (or between
+    each sample in the same dataset if only one is given) by utelizing broadcast mechanism.
 
-def init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False):
+    - **Parameters**::
+
+        :param data1: Tensor containing the first dataset
+            :type data1: Tensor (n_samples x n_features)
+        :param data2: Tensor containing the second dataset. If only one Tensor is given, the pairwise distance between
+                      each sample in that Tensor is calculated.
+            :type data2: Tensor (n_samples x n_features)
+    """
+    if data2 is None:
+        data2 = data1
+
+    # expand first Tensor to have dimensionality n_samples*1*n_features
+    expanded_a = data1.unsqueeze(dim=1)
+
+    # expand second Tensor to have dimensionality 1*n_samples*n_features
+    expanded_b = data2.unsqueeze(dim=0)
+
+    # calculate pairwise distances
+    dis = (expanded_a - expanded_b)**2.0
+
+    # return 2-dimensional matrix containing pairwise distances
+    dis = dis.sum(dim=-1).squeeze()
+    return dis
+
+
+def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='cosine'):
+    """Initialization method for K-Means (k-Means++)
+    """
     n_samples, n_features = x.size()
+
+    # initialize tensor that will hold the cluster centers and send it to GPU if needed
     clusters = torch.Tensor(n_clusters, n_features)
     if use_cuda:
         clusters = clusters.cuda()
 
+    # Set the number of local seeding trials if none is given
     if n_local_trials is None:
         n_local_trials = 2 + int(np.log(n_clusters))
+
+    # pick first cluster center randomly
     clusters[0] = x[np.random.randint(n_samples)]
 
-    closest_dist_sq = 1 - clusters[[0]].mm(x.t())
-    closest_dist_sq = closest_dist_sq.view(-1)
-    current_pot = closest_dist_sq.sum()
+    # initialize list of distances to the selected centroid and calculate current potential
+    if distance == 'cosine':
+        # calculate distance of each point to the selected centroid using the distance measure of the spherical k-Means
+        closest_dist_sq = 1 - clusters[[0]].mm(x.t())
+        closest_dist_sq = closest_dist_sq.view(-1)
+    elif distance == 'euclidean':
+        # calculate distance of each point to the selected centroid using the Euclidean distance measure
+        closest_dist_sq = _pairwise_distance(clusters[[0]], x)
+    else:
+        raise ValueError('Unknown value for parameter mode: {}'.format(distance))
+    current_pot = closest_dist_sq.sum().item()
 
+    # pick the remaining n_clusters-1 cluster centers
     for c in range(1, n_clusters):
+        # Choose center candidates by sampling with probability proportional to the squared distance to the closest
+        # existing center
         rand_vals = np.random.random_sample(n_local_trials) * current_pot
         candidate_ids = np.searchsorted(closest_dist_sq.cumsum(-1), rand_vals)
-        distance_to_candidates = 1 - x[candidate_ids].mm(x.t())
 
+        # calculate distance of each data point to the candidates
+        if distance == 'cosine':
+            distance_to_candidates = 1 - x[candidate_ids].mm(x.t())
+        elif distance == 'euclidean':
+            distance_to_candidates = _pairwise_distance(x[candidate_ids], x)
+        else:
+            raise ValueError('Unknown value for parameter mode: {}'.format(distance))
+
+        # iterate over the candidates for the new cluster center and select the most suitable
         best_candidate = None
         best_pot = None
         best_dist_sq = None
@@ -1046,7 +1100,7 @@ def init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False):
             # Compute potential when including center candidate
             new_dist_sq = torch.min(closest_dist_sq,
                                     distance_to_candidates[trial])
-            new_pot = new_dist_sq.sum()
+            new_pot = new_dist_sq.sum().item()
 
             # Store result if it is the best local trial so far
             if (best_candidate is None) or (new_pot < best_pot):
@@ -1061,20 +1115,49 @@ def init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False):
     return clusters
 
 
-def spherical_kmeans(x, n_clusters, max_iters=100, verbose=True,
-                     init=None, eps=1e-4):
-    """Spherical kmeans
-    Args:
-        x (Tensor n_samples x n_features): data points
-        n_clusters (int): number of clusters
+def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, init=None, eps=1e-4):
+    """Performing k-Means clustering (Lloyd's algorithm) with Tensors utilizing GPU resources.
+
+    - **Parameter**::
+
+        :param x: Data that will be used for clustering
+            :type x: Tensor (n_samples x n_dimensions)
+        :param n_clusters: Number of clusters that will be computed
+            :type n_clusters: Integer
+        :param distance: Distance measure used for clustering
+            :type distance: String
+        :param max_iters: Maximal number of iterations used in the K-Means clustering
+            :type max_iters: Integer
+        :param verbose: Flag to activate verbose output
+            :type verbose: Boolean
+        :param init: Initialization process for the K-Means algorithm
+            :type init: String
+        :param eps: Relative tolerance with regards to Frobenius norm of the difference in the cluster centers of two
+                    consecutive iterations to declare convergence. It's not advised to set `tol=0` since convergence
+                    might never be declared due to rounding errors. Use a very small number instead.
+            :type eps: Float
+
+    - **Returns**::
+
+        :returns clusters: Cluster centers calculated by the K-Means algorthim
+            :rtype clusters: Tensor (n_clusters x n_dimensions)
     """
+    # make sure there are more samples than requested clusters
+    if x.shape[0] < n_clusters:
+        raise ValueError(f"n_samples={x.shape[0]} should be >= n_clusters={n_clusters}.")
+
+    # check whether the input tensor is on the GPU
     use_cuda = x.is_cuda
+
+    # store number of data points and dimensionality of each data point
     n_samples, n_features = x.size()
+
+    # determine initialization procedure for this run of the k-Means algorithm
     if init == "kmeans++":
-        print("        use initialization: {}".format(init))
-        clusters = init_kmeans(x, n_clusters, use_cuda=use_cuda)
+        print("        Initialization method for k-Means: k-Means++")
+        clusters = _init_kmeans(x, n_clusters, use_cuda=use_cuda, distance=distance)
     elif init is None:
-        print("        use initialization: {}".format(init))
+        print("        Initialization method for k-Means: random")
         indices = torch.randperm(n_samples)[:n_clusters]
         if use_cuda:
             indices = indices.cuda()
@@ -1082,33 +1165,51 @@ def spherical_kmeans(x, n_clusters, max_iters=100, verbose=True,
     else:
         raise ValueError("Unknown initialization procedure: {}".format(init))
 
+    # perform Lloyd's algorithm iteratively until convergence or the number of iterations exceeds max_iters
     prev_sim = np.inf
-
     for n_iter in range(max_iters):
-        # assign data points to clusters
-        cos_sim = x.mm(clusters.t())
-        tmp, assign = cos_sim.max(dim=-1)
-        sim = tmp.mean()
+        # calculate the distance of data points to clusters using the selected distance measure. Use the calculated
+        # distances to assign each data point to a cluster
+        if distance == 'cosine':
+            sim = x.mm(clusters.t())
+            tmp, assign = sim.max(dim=-1)
+        elif distance == 'euclidean':
+            sim = _pairwise_distance(x, clusters)
+            tmp, assign = sim.min(dim=-1)
+        else:
+            raise ValueError('Unknown distance measure: {}'.format(distance))
+
+        # get the mean distance to the cluster centers
+        sim_mean = tmp.mean()
         if (n_iter + 1) % 10 == 0 and verbose:
-            print("        Spherical kmeans iter {}, objective value {}".format(
-                n_iter + 1, sim))
+            print("        k-Means iter: {}, distance: {}, objective value: {}".format(n_iter + 1, distance, sim_mean))
 
         # update clusters
         for j in range(n_clusters):
+            # get all data points that were assigned to the current cluster
             index = assign == j
+
+            # if no data point was assigned to the current cluster, use the data point furthest away from every cluster
+            # as new cluster center
             if index.sum() == 0:
-                # clusters[j] = x[random.randrange(n_samples)]
-                idx = tmp.argmin()
+                if distance == 'cosine':
+                    idx = tmp.argmin()
+                elif distance == 'euclidean':
+                    idx = tmp.argmax()
                 clusters[j] = x[idx]
                 tmp[idx] = 1
+
+            # otherwise, update the center of the current cluster based on all data points assigned to this cluster
             else:
                 xj = x[index]
                 c = xj.mean(0)
                 clusters[j] = c / c.norm()
 
-        if np.abs(prev_sim - sim)/(np.abs(sim)+1e-20) < 1e-6:
+        # stop k-Means if the difference in the cluster center is below the tolerance (i.e. the algorithm converged)
+        if np.abs(prev_sim - sim_mean) / (np.abs(sim_mean) + 1e-20) < eps:
             break
-        prev_sim = sim
+        prev_sim = sim_mean
+
     return clusters
 
 
