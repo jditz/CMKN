@@ -10,7 +10,7 @@
 # Contact: ditz@informatik.uni-tuebingen.de                    #
 ################################################################
 
-from .model import CON, CON2, TestCON
+from .model import CON
 from .utils import (
     find_kmer_positions, kmer2dict, anchors_to_motivs, category_from_output, build_kmer_ref_from_file,
     build_kmer_ref_from_list, compute_metrics, register_hooks, plot_grad_flow, Hook, ClassBalanceLoss,
@@ -18,7 +18,7 @@ from .utils import (
 )
 from .data_utils import CONDataset
 
-MODEL = ['CON', 'CON2', 'CONDataset', 'ClassBalanceLoss', 'TestCON']
+MODEL = ['CON', 'CONDataset', 'ClassBalanceLoss']
 UTIL = ['find_kmer_positions', 'kmer2dict', 'build_kmer_ref_from_file', 'build_kmer_ref_from_list',
         'category_from_output', 'compute_metrics', 'anchors_to_motivs', 'anchor_weight_matrix',
         'model_interpretation', 'create_consensus', 'oli2number', 'matrix_inverse_sqrt']
