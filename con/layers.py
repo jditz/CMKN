@@ -54,12 +54,12 @@ class CONLayer(nn.Conv1d):
         """
         # set padding parameter dependent on the selected padding type
         if padding == "SAME":
-            padding = (kmer_length - 1) // 2
+            self.padding_length = kmer_length - 1
         else:
-            padding = 0
+            self.padding_length = None
 
         # initialize the parent class
-        super(CONLayer, self).__init__(in_channels, out_channels, kernel_size=kmer_length, padding=padding,
+        super(CONLayer, self).__init__(in_channels, out_channels, kernel_size=kmer_length, padding=0,
                                        dilation=dilation, groups=groups, bias=False)
 
         # set parameters
@@ -140,8 +140,8 @@ class CONLayer(nn.Conv1d):
         indices = torch.randperm(oligomers.size(0))[:n_sampling_oligomers]
         oligomers = oligomers[indices]
 
-        # normalize the oligomers but keep the positional information unchanged
-        if include_pos:
+        # normalize the oligomers only if no positional information was added
+        if not include_pos:
             normalize_(oligomers)
         return oligomers
 
@@ -262,6 +262,12 @@ class CONLayer(nn.Conv1d):
             # fill the input tensor
             pos_in[:, 0, i] = x_circle
             pos_in[:, 1, i] = y_circle
+
+        # add padding to one side of the sequence input to ensure that input and output have the same dimensionality
+        #   -> we cannot use the build-in padding provided by nn.Conv1d because padding on both sides of the input
+        #      sequence would destroy the oligo kernel formulation
+        if self.padding_length > 0:
+            x_in = torch.cat([x_in, x_in.new_zeros(x_in.shape[0], x_in.shape[1], self.padding_length)], dim=-1)
 
         # calculate the convolution between oligomer encoding of the input and oligomer encoding of the anchor points
         x_out = super(CONLayer, self).forward(x_in)

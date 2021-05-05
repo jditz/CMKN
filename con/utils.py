@@ -1019,35 +1019,6 @@ def matrix_inverse_sqrt(input, eps=1e-2):
 # KMEANS/KMEANS++
 #############################################################################
 
-def _pairwise_distance(data1, data2=None):
-    """This function calculates the pairwise Euclidean distance between each sample in the given datasets (or between
-    each sample in the same dataset if only one is given) by utelizing broadcast mechanism.
-
-    - **Parameters**::
-
-        :param data1: Tensor containing the first dataset
-            :type data1: Tensor (n_samples x n_features)
-        :param data2: Tensor containing the second dataset. If only one Tensor is given, the pairwise distance between
-                      each sample in that Tensor is calculated.
-            :type data2: Tensor (n_samples x n_features)
-    """
-    if data2 is None:
-        data2 = data1
-
-    # expand first Tensor to have dimensionality n_samples*1*n_features
-    expanded_a = data1.unsqueeze(dim=1)
-
-    # expand second Tensor to have dimensionality 1*n_samples*n_features
-    expanded_b = data2.unsqueeze(dim=0)
-
-    # calculate pairwise distances
-    dis = (expanded_a - expanded_b)**2.0
-
-    # return 2-dimensional matrix containing pairwise distances
-    dis = dis.sum(dim=-1).squeeze()
-    return dis
-
-
 def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='cosine'):
     """Initialization method for K-Means (k-Means++)
     """
@@ -1072,7 +1043,8 @@ def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='c
         closest_dist_sq = closest_dist_sq.view(-1)
     elif distance == 'euclidean':
         # calculate distance of each point to the selected centroid using the Euclidean distance measure
-        closest_dist_sq = _pairwise_distance(clusters[[0]], x)
+        closest_dist_sq = torch.cdist(clusters[[0]], x, p=2)
+        closest_dist_sq = closest_dist_sq.view(-1)
     else:
         raise ValueError('Unknown value for parameter mode: {}'.format(distance))
     current_pot = closest_dist_sq.sum().item()
@@ -1082,13 +1054,13 @@ def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='c
         # Choose center candidates by sampling with probability proportional to the squared distance to the closest
         # existing center
         rand_vals = np.random.random_sample(n_local_trials) * current_pot
-        candidate_ids = np.searchsorted(closest_dist_sq.cumsum(-1), rand_vals)
+        candidate_ids = np.searchsorted(closest_dist_sq.cumsum(-1).cpu(), rand_vals)
 
         # calculate distance of each data point to the candidates
         if distance == 'cosine':
             distance_to_candidates = 1 - x[candidate_ids].mm(x.t())
         elif distance == 'euclidean':
-            distance_to_candidates = _pairwise_distance(x[candidate_ids], x)
+            distance_to_candidates = torch.cdist(x[candidate_ids], x, p=2)
         else:
             raise ValueError('Unknown value for parameter mode: {}'.format(distance))
 
@@ -1115,7 +1087,7 @@ def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='c
     return clusters
 
 
-def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, init=None, eps=1e-4):
+def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, init=None, tol=1e-4):
     """Performing k-Means clustering (Lloyd's algorithm) with Tensors utilizing GPU resources.
 
     - **Parameter**::
@@ -1132,10 +1104,10 @@ def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, ini
             :type verbose: Boolean
         :param init: Initialization process for the K-Means algorithm
             :type init: String
-        :param eps: Relative tolerance with regards to Frobenius norm of the difference in the cluster centers of two
+        :param tol: Relative tolerance with regards to Frobenius norm of the difference in the cluster centers of two
                     consecutive iterations to declare convergence. It's not advised to set `tol=0` since convergence
                     might never be declared due to rounding errors. Use a very small number instead.
-            :type eps: Float
+            :type tol: Float
 
     - **Returns**::
 
@@ -1174,7 +1146,7 @@ def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, ini
             sim = x.mm(clusters.t())
             tmp, assign = sim.max(dim=-1)
         elif distance == 'euclidean':
-            sim = _pairwise_distance(x, clusters)
+            sim = torch.cdist(x, clusters, p=2)
             tmp, assign = sim.min(dim=-1)
         else:
             raise ValueError('Unknown distance measure: {}'.format(distance))
@@ -1206,7 +1178,7 @@ def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, ini
                 clusters[j] = c / c.norm()
 
         # stop k-Means if the difference in the cluster center is below the tolerance (i.e. the algorithm converged)
-        if np.abs(prev_sim - sim_mean) / (np.abs(sim_mean) + 1e-20) < eps:
+        if torch.abs(prev_sim - sim_mean) / (torch.abs(sim_mean) + 1e-20) < tol:
             break
         prev_sim = sim_mean
 
