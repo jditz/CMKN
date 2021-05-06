@@ -1021,6 +1021,24 @@ def matrix_inverse_sqrt(input, eps=1e-2):
 
 def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='cosine'):
     """Initialization method for K-Means (k-Means++)
+
+    - **Parameters**::
+
+        :param x: Data that will be used for clustering
+            :type x: Tensor (n_samples x n_dimensions)
+        :param n_clusters: Number of clusters that will be computed
+            :type n_clusters: Integer
+        :param n_local_trials: Number of local seeding trails
+            :type n_local_trials: Integer
+        :param use_cuda: Flag that determines whether computations should be performed on the GPU
+            :type use_cuda: Boolean
+        :param distance: Distance measure used for clustering
+            :type distance: String
+
+    . **Returns**::
+
+        :returns clusters: Initial centers for each cluster
+            :rtype clusters: Tensor (n_clusters x n_dimensions)
     """
     n_samples, n_features = x.size()
 
