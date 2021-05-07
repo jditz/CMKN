@@ -261,7 +261,7 @@ class CONDataset(data.Dataset):
             raise ValueError('Unknown encoding option: {}'.format(encode))
 
         # create dictionary that maps each string of length kmer_size that can be build using alphabet to an integer
-        self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[self.alphabet][0])
+        #self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[self.alphabet][0])
 
     def __len__(self):
         return len(self.data)

@@ -90,11 +90,13 @@ class CONLayer(nn.Conv1d):
         # select the chosen kernel function from the dictionary that maps to all available functions
         kernel_func = kernels[kernel_func]
         # for convenient's sake, initialize a simple-to-use handler for the kernel function
+        #   -> x = position tensor
+        #      y = oligomer tensor
         self.kappa = lambda x, y: kernel_func(x, y, kmer_length, *self.kernel_args)
 
         # set the kernel function used for computing the linear transformation factor
-        kernel_func_lintrans = kernels["exp"]
-        self.kappa_lintrans = lambda x: kernel_func_lintrans(x, *self.kernel_args[0:2])
+        #kernel_func_lintrans = kernels["exp"]
+        #self.kappa_lintrans = lambda x: kernel_func_lintrans(x, *self.kernel_args[0:2])
 
     def sample_oligomers(self, x_in, n_sampling_oligomers=1000, include_pos=False):
         """Sample oligomers from the given Tensor. These oligomers will be used as input to the spherical k-Means
@@ -225,9 +227,16 @@ class CONLayer(nn.Conv1d):
         if not self._need_lintrans_computed:
             return self.lintrans
 
-        lintrans = self.pos_anchors.view(self.out_channels, -1)
-        lintrans = lintrans.mm(lintrans.t())
-        lintrans = self.kappa_lintrans(lintrans)
+        # compute the linear transformation matrix for the positions of each anchor point
+        lintrans_pos = self.pos_anchors.view(self.out_channels, -1)
+        lintrans_pos = lintrans_pos.mm(lintrans_pos.t())
+
+        # compute the linear transformation matrix for the oligomers of each anchor point
+        lintrans_oli = self.weight.view(self.out_channels, -1)
+        lintrans_oli = lintrans_oli.mm(lintrans_oli.t())
+
+        # resolve the kernel function using the linear transformation matrices
+        lintrans = self.kappa(lintrans_pos, lintrans_oli)
         lintrans = matrix_inverse_sqrt(lintrans)
         if not self.training:
             self._need_lintrans_computed = False

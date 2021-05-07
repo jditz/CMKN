@@ -421,7 +421,7 @@ def anchors_to_motivs(anchor_points, positions, type="DNA_FULL", outdir=""):
             # anchor oligomer
             for char in range(anchor_points.shape[1]):
                 if anchor_points[anchor, char, pos] != 0:
-                    scores.append((ALPHABETS[type][0][char], anchor_points[anchor, char, pos]))
+                    scores.append((ALPHABETS[type][0][char], anchor_points[anchor, char, pos].cpu().numpy()))
 
             all_scores.append(scores)
 
