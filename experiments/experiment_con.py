@@ -8,6 +8,7 @@
 
 import os
 import argparse
+import pickle
 
 from torch.utils.data import DataLoader
 import torch
@@ -18,7 +19,7 @@ import torch.optim as optim
 import numpy as np
 from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
 
-from con import (CON, CON2, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref_from_file, build_kmer_ref_from_list,
+from con import (CON, CONDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref_from_file, build_kmer_ref_from_list,
                  compute_metrics, create_consensus, oli2number)
 
 from Bio import SeqIO
@@ -32,10 +33,11 @@ DATA_DIR = './data/'
 
 # extend custom data handler for the used dataset
 class CustomHandler(CONDataset):
-    def __init__(self, filepath, kmer_size=3, drug='FPV', nb_classes=3, clean_set=True):
+    def __init__(self, filepath, kmer_size=3, drug='SQV', nb_classes=2, clean_set=True, encode='onehot'):
         self.drug_nb = {'FPV': 1, 'ATV': 2, 'IDV': 3, 'LPV': 4, 'NFV': 5, 'SQV': 6, 'TPV': 7, 'DRV': 8,
                         '3TC': 1, 'ABC': 2, 'AZT': 3, 'D4T': 4, 'DDI': 5, 'TDF': 6,
                         'EFV': 1, 'NVP': 2, 'ETR': 3, 'RPV': 4}
+        self.drug = drug
 
         if clean_set:
             aux_tup = (self.drug_nb[drug], 'NA')
@@ -43,7 +45,7 @@ class CustomHandler(CONDataset):
             aux_tup = None
 
         super(CustomHandler, self).__init__(filepath, kmer_size=kmer_size, alphabet='PROTEIN_FULL',
-                                            clean_set=aux_tup)
+                                            clean_set=aux_tup, encode=encode)
 
         self.nb_classes = nb_classes
         if nb_classes == 2:
@@ -66,15 +68,14 @@ class CustomHandler(CONDataset):
         # iterate through all id strings and update the label tensor, accordingly
         for i, id_str in enumerate(sample[1]):
             try:
-                aux_lab = id_str.split('|')[self.drug_nb]
+                aux_lab = id_str.split('|')[self.drug_nb[self.drug]]
                 if aux_lab != 'NA':
                     if len(sample[1]) == 1:
                         labels[self.class_to_idx[aux_lab]] = 1.0
                     else:
                         labels[i, self.class_to_idx[aux_lab]] = 1.0
 
-            except Exception as e:
-                print('Exception at index {}:'.format(idx), e)
+            except:
                 continue
 
         # return the sample with updated label tensor
@@ -117,8 +118,8 @@ class HivHandler(CONDataset):
 
 # custom handler for the ENCODE dataset used by DeepBind and CKN papers
 class EncodeHandler(CONDataset):
-    def __init__(self, datadir, ext='seq.gz', kmer_size=8, tfid=None, nb_classes=2):
-        super(EncodeHandler, self).__init__(datadir, ext=ext, kmer_size=kmer_size, tfid=tfid)
+    def __init__(self, datadir, ext='seq.gz', kmer_size=8, tfid=None, nb_classes=2, encode='encode'):
+        super(EncodeHandler, self).__init__(datadir, ext=ext, kmer_size=kmer_size, tfid=tfid, encode=encode)
 
         self.nb_classes = nb_classes
 
@@ -154,29 +155,24 @@ def load_args():
                              "'ENCODE' are supported choices")
     parser.add_argument('--batch-size', dest="batch_size", type=int, default=64, metavar='M',
                         help='input batch size for training (default: 4)')
-    parser.add_argument('--epochs', dest="nb_epochs", type=int, default=200 , metavar='N',
+    parser.add_argument('--epochs', dest="nb_epochs", type=int, default=200, metavar='N',
                         help='number of epochs to train (default: 5)')
     parser.add_argument("--out-channels", dest="out_channels", metavar="m", default=[99], nargs='+',
                         type=int,
                         help="number of out channels for each oligo kernel and conv layer (default [40])")
     parser.add_argument("--strides", dest="strides", metavar="s", default=[1], nargs='+', type=int,
                         help="stride value for each layer (default: [1])")
-    parser.add_argument("--paddings", dest="paddings", metavar="p", default=[], nargs="+",
-                        type=str, help="padding values for each convolutional layer (default [])")
-    parser.add_argument("--kernel-sizes", dest="kernel_sizes", metavar="k", default=[], nargs="+", type=int,
-                        help="kernel sizes for oligo and convolutional layers (default [])")
+    parser.add_argument("--paddings", dest="paddings", metavar="p", default=['SAME'], nargs="+",
+                        type=str, help="padding type for each convolutional layer (default ['SAME'])")
+    parser.add_argument("--kernel-sizes", dest="kernel_sizes", metavar="k", default=[1], nargs="+", type=int,
+                        help="kernel sizes for oligo and convolutional layers (default [1])")
     parser.add_argument("--sigma", dest="sigma", default=1, type=float,
                         help="sigma for the oligo kernel layer (default: 4)")
-    parser.add_argument("--alpha", dest="alpha", default=100, type=int,
+    parser.add_argument("--alpha", dest="alpha", default=1, type=int,
                         help="alpha parameter used in the exponential function of the oligo layer; if set to -1, the "
                              "value will be depending on the number of oligomers (default: -1)")
-    parser.add_argument("--scale", dest="scale", default=10, type=int,
+    parser.add_argument("--scale", dest="scale", default=100, type=int,
                         help="scaling parameter for the oligo kernel layer (Default: 100)")
-    parser.add_argument("--kmer", dest="kmer_size", default=1, type=int,
-                        help="length of the k-mers used for the oligo kernel layer (default 3)")
-    parser.add_argument("--cutoff", dest="cutoff", default=0.999, type=float,
-                        help="values of CONLayer's alphanet convolution that are greater or equal than this cutoff "
-                             "need to be set to one (default: .999)")
     parser.add_argument("--num-classes", dest="num_classes", default=2, type=int,
                         help="number of classes in the prediction task")
     parser.add_argument("--kfold", dest="kfold", default=5, type=int, help="k-fold cross validation (default: 5)")
@@ -184,19 +180,21 @@ def load_args():
                         help="regularization used in the last layer (default: l2)")
     parser.add_argument("--regularization", type=float, default=1e-6,
                         help="regularization parameter for sup CON")
-    parser.add_argument("--preprocessor", type=str, default='standard_row', choices=['standard_row', 'standard_col'],
-                        help="preprocessor for last layer of CON (default: standard_row)")
+    parser.add_argument("--preprocessor", type=str, default='standard_row',
+                        help="preprocessor for last layer of CON (default: standard_row). Set to 'standard_row' or "
+                             "'standard_column' in order to use a LinearMixin layer. Or set it to the length of input"
+                             "sequences to use a standard fully-connected layer.")
     parser.add_argument("--outdir", metavar="outdir", dest="outdir", default='output', type=str,
                         help="output path(default: '')")
-    parser.add_argument("--use-cuda", action='store_true', default=False, help="use gpu (default: False)")
+    parser.add_argument("--use-cuda", action='store_true', default=True, help="use gpu (default: False)")
     parser.add_argument("--noise", type=float, default=0.0, help="perturbation percent")
-    parser.add_argument("--file", dest="filepath", default="./data/steiner2020/", type=str,
+    parser.add_argument("--file", dest="filepath", default="./data/hivdb/", type=str,
                         help="path to the file containing the dataset.")
     parser.add_argument("--extension", dest="extension", default="fasta", type=str,
                         help="extension of the file containing the dataset (default fasta)")
-    parser.add_argument("--drug", dest="drug", default="LPV", type=str,
+    parser.add_argument("--drug", dest="drug", default="SQV", type=str,
                         help="specifies the drug that will be used to classify virus resilience (default SQV)")
-    parser.add_argument("--encodeset", dest="encodeset", default="SIRT6_K562_SIRT6_Harvard", type=str,
+    parser.add_argument("--encodeset", dest="encodeset", default="CTCF_A549_CTCF_UT-A", type=str,
                         help="specifies which ENCODE dataset will be used for training a model; if set to 'optim', " +
                              "the hyperparameters will be optimized using 100 randomly selected ENCODE datasets")
 
@@ -206,18 +204,34 @@ def load_args():
     # GPU will only be used if available
     args.use_cuda = args.use_cuda and torch.cuda.is_available()
 
+    # store length of oligomers for a simple rpoxy access
+    args.kmer_size = args.kernel_sizes[0]
+
     # 'num-anchors', 'subsampling', and 'sigma' have to be of same length
-    if not len(args.out_channels) == len(args.strides) == len(args.paddings) + 1 == len(args.kernel_sizes) + 1:
+    if not len(args.out_channels) == len(args.strides) == len(args.paddings) == len(args.kernel_sizes):
         raise ValueError('The size combination of out_channels, strides, paddings, and kernel_sizes is invalid!\n' +
-                         'out_channels and strides have to have the same length while the length of paddings and ' +
-                         'kernel_sizes have to be one less than the other two.')
+                         '    out_channels, strides, paddings, and kernel_sizes must have the same size')
 
     # number of layers is equal to length of the 'num-anchors' vector
     args.n_layer = len(args.out_channels)
 
-    # for HIV data, set the complete filepath to the dataset file
+    # make sure that args.prerocessor is set up, properly
+    try:
+        args.preprocessor = int(args.preprocessor)
+    except ValueError:
+        if args.preprocessor not in ['standard_row', 'standard_column']:
+            raise ValueError('preprocessor must be either an Integer or one of the following strings: standard_row, '
+                             'standard_column')
+
+    # for an HIV experiment, also store the type of antiviral drug
     if args.type == 'HIV':
-        args.filepath = args.filepath + args.drug + '.' + args.extension
+        if args.drug in ['FPV', 'ATV', 'IDV', 'LPV', 'NFV', 'SQV', 'TPV', 'DRV']:
+            args.drug_type = 'PI'
+        elif args.drug in ['3TC', 'ABC', 'AZT', 'D4T', 'DDI', 'TDF']:
+            args.drug_type = 'NRTI'
+        else:
+            args.drug_type = 'NNRTI'
+        args.filepath += '{}_DataSet.fasta'.format(args.drug_type)
 
     # set the random seeds
     torch.manual_seed(args.seed)
@@ -229,63 +243,22 @@ def load_args():
     args.save_logs = False
     if args.outdir != "":
         args.save_logs = True
-        outdir = args.outdir
-        if not os.path.exists(outdir):
-            try:
-                os.makedirs(outdir)
-            except:
-                pass
-        outdir = outdir + "/{}".format(NAME)
-        if not os.path.exists(outdir):
-            try:
-                os.makedirs(outdir)
-            except:
-                pass
         if args.type == 'HIV':
-            outdir = outdir + "/{}".format(args.drug)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
+            aux_dir = args.drug
         else:
-            outdir = outdir + "/{}".format(args.encodeset)
-            if not os.path.exists(outdir):
-                try:
-                    os.makedirs(outdir)
-                except:
-                    pass
-        outdir = outdir + "/classes_{}".format(args.num_classes)
-        if not os.path.exists(outdir):
+            aux_dir = args.encodeset
+        aux_out = '/{}/{}/classes_{}/kmer_{}/params_{}_{}_{}/anchors_{}/layers_{}'.format(NAME, aux_dir,
+                                                                                          args.num_classes,
+                                                                                          args.kmer_size, args.sigma,
+                                                                                          args.scale, args.alpha,
+                                                                                          args.out_channels[0],
+                                                                                          args.n_layer)
+        args.outdir += aux_out
+        if not os.path.exists(args.outdir):
             try:
-                os.makedirs(outdir)
+                os.makedirs(args.outdir)
             except:
                 pass
-        outdir = outdir + "/kmer_{}".format(args.kmer_size)
-        if not os.path.exists(outdir):
-            try:
-                os.makedirs(outdir)
-            except:
-                pass
-        outdir = outdir + "/params_{}_{}_{}".format(args.sigma, args.scale, args.alpha)
-        if not os.path.exists(outdir):
-            try:
-                os.makedirs(outdir)
-            except:
-                pass
-        outdir = outdir + '/anchors_{}'.format(args.out_channels[0])
-        if not os.path.exists(outdir):
-            try:
-                os.makedirs(outdir)
-            except:
-                pass
-        outdir = outdir + '/layers_{}'.format(args.n_layer)
-        if not os.path.exists(outdir):
-            try:
-                os.makedirs(outdir)
-            except:
-                pass
-        args.outdir = outdir
 
     return args
 
@@ -389,210 +362,113 @@ def count_classes_encode(labels, verbose=True):
 def train_hiv(args):
     args.alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
 
-    # create dictionary that maps kmers to index
-    kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
-
-    # build tensor holding reference positions
-    ref_pos = build_kmer_ref_from_file(args.filepath, args.extension, kmer_dict, args.kmer_size)
-
-    # initialize con model
-    model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
-                 strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
-                 kernel_args=[args.sigma, args.scale])
-
     # load data
-    data_all = CustomHandler(args.filepath, kmer_size=args.kmer_size, drug=args.drug, nb_classes=args.num_classes,
-                             clean_set=True)
+    data_all = CustomHandler(args.filepath, kmer_size=args.kmer_size, drug=args.drug, encode='onehot')
 
-    # get labels of each entry for stratified shuffling and distribution of classes for class balance loss
-    args.class_count, args.expected_loss, label_vec = count_classes_hiv(args.filepath, True, data_all.drug_nb,
-                                                                        args.num_classes)
-
-    # Creating data indices for training and validation splits:
-    shuffle_dataset = True
-    random_seed = args.seed
-    dataset_size = len(data_all)
-    indices = np.arange(dataset_size)
-    if shuffle_dataset:
-        # create StratifiedShuffleSplit object for the creation of stratified training, validation, and test sets
-        sss = StratifiedShuffleSplit(n_splits=2, train_size=0.9, random_state=random_seed)
-
-        # get indices of the test set
-        _, aux_split = sss.split(indices, label_vec)
-        args.test_indices = indices[aux_split[1]]
-
-        # get indices of training and validation set
-        aux_indices = indices[aux_split[0]]
-        _, aux_split = sss.split(aux_indices, label_vec[aux_split[0]])
-        args.train_indices = aux_indices[aux_split[0]]
-        args.val_indices = aux_indices[aux_split[1]]
-    else:
-        validation_split = .2
-        test_split = .1
-        split_val = int(np.floor(validation_split * dataset_size))
-        split_test = int(np.floor(test_split * dataset_size))
-        args.train_indices, args.val_indices, args.test_indices = indices[split_val:], indices[split_test:split_val], \
-                                                                  indices[:split_test]
-
-    # Creating PyTorch data samplers and loaders:
-    data_train = Subset(data_all, args.train_indices)
-    data_val = Subset(data_all, args.val_indices)
-
-    loader_train = DataLoader(data_train, batch_size=args.batch_size)
-    loader_val = DataLoader(data_val, batch_size=args.batch_size)
-
-    # initialize optimizer and loss function
-    if args.num_classes == 2:
-        criterion = ClassBalanceLoss(args.class_count, args.num_classes, 'sigmoid', 0.99, 1.0)
-    else:
-        criterion = ClassBalanceLoss(args.class_count, args.num_classes, 'cross_entropy', 0.99, 1.0)
-    optimizer = optim.Adam(model.parameters(), lr=0.1)
-    lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
-
-    # train model
-    acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
-                                epochs=args.nb_epochs, use_cuda=args.use_cuda)
-
-    # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
-    # model
-    torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss},
-               args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + ".pkl")
-
-    try:
-        # try to import pyplot
-        import matplotlib.pyplot as plt
-
-        # show the evolution of the acc and loss
-        fig2, axs2 = plt.subplots(2, 2)
-        axs2[0, 0].plot(acc['train'])
-        axs2[0, 0].set_title("train accuracy")
-        axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
-        axs2[0, 1].plot(acc['val'])
-        axs2[0, 1].set_title("val accuracy")
-        axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
-        axs2[1, 0].plot(loss['train'])
-        axs2[1, 0].set_title("train loss")
-        axs2[1, 0].set(xlabel='epoch', ylabel='loss')
-        axs2[1, 1].plot(loss['val'])
-        axs2[1, 1].set_title("val loss")
-        axs2[1, 1].set(xlabel='epoch', ylabel='loss')
-        # plt.show()
-        plt.savefig(args.outdir + "/acc_loss.png")
-
-        # show the position of the anchor points as a histogram
-        anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
-        anchor = anchor.detach().numpy()
-        fig3 = plt.figure()
-        plt.hist(anchor, bins=ref_pos.size(1))
-        plt.xlabel('Position')
-        plt.ylabel('# Anchor Points')
-        plt.title('Distribution of anchor points')
-        # plt.show()
-        plt.savefig(args.outdir + "/anchor_positions.png")
-
-    except:
-        print("Cannot import matplotlib.pyplot")
-
-
-def train_hiv_steiner(args):
-    args.alphabet = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
-
-    # create dictionary that maps kmers to index
-    kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
-
-    # build tensor holding reference positions
-    #ref_pos = build_kmer_ref_from_file(args.filepath, args.extension, kmer_dict, args.kmer_size)
-    consensus = create_consensus(args.filepath, extension=args.extension, ambi='PROTEIN')
-    ref_oli = oli2number(consensus, kmer_dict, args.kmer_size, ambi='PROTEIN')
-
-    # load data
-    data_all = HivHandler(args.filepath, kmer_size=args.kmer_size)
-
-    # get labels of each entry for stratified shuffling and distribution of classes for class balance loss
-    args.class_count, args.expected_loss, label_vec = count_classes_hiv(args.filepath, True, -1, 2)
-
-    model = CON(out_channels_list=args.out_channels, ref_kmerPos=ref_oli, cutoff=args.cutoff,
-                filter_sizes=args.kernel_sizes, strides=args.strides, paddings=args.paddings,
-                num_classes=args.num_classes, kernel_args=[args.sigma, args.scale, args.alpha])
-
-    data_loader = DataLoader(data_all, batch_size=args.batch_size)
-
-    # set loss function and optimization algorithm
-    criterion = ClassBalanceLoss(args.class_count, 2, 'sigmoid', 0.99, 1.0)
-    optimizer = optim.Adam(model.parameters(), lr=0.1)
-    lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
-
-    # train model
+    # set random seeds
+    torch.manual_seed(args.seed)
     if args.use_cuda:
-        model.cuda()
-    acc, loss = model.sup_train(data_loader, criterion, optimizer, lr_scheduler, epochs=args.nb_epochs,
-                                early_stop=False, use_cuda=args.use_cuda)
+        torch.cuda.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
-    # save model
-    torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss},
-               args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_all.pkl")
+    # load indices for 5-fold cross-validation
+    fold_filepath = args.filepath.split('/')[:-1]
+    fold_filepath = '/'.join(fold_filepath) + '/hivdb_stratifiedFolds.pkl'
+    folds = pickle.load(fold_filepath)
+    folds = folds[args.drug_type][args.drug]
 
-    # # create indices for training and validation splits
-    # #  -> a stratified cross-validation will be performed
-    # dataset_size = len(data_all)
-    # indices = np.arange(dataset_size)
-    # skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=args.seed)
-    #
-    # # perform stratified cross-validation
-    # for fold, split_idx in enumerate(skf.split(indices, label_vec)):
-    #     # initialize con model
-    #     model = CON(out_channels_list=args.out_channels, ref_kmerPos=ref_oli, cutoff=args.cutoff,
-    #                 filter_sizes=args.kernel_sizes, strides=args.strides, paddings=args.paddings,
-    #                 num_classes=args.num_classes, kernel_args=[args.sigma, args.scale, args.alpha])
-    #
-    #     # split dataset into training and validation samples
-    #     args.train_indices, args.val_indices = indices[split_idx[0]], indices[split_idx[1]]
-    #
-    #     # Creating PyTorch data samplers and loaders:
-    #     data_train = Subset(data_all, args.train_indices)
-    #     data_val = Subset(data_all, args.val_indices)
-    #
-    #     loader_train = DataLoader(data_train, batch_size=args.batch_size)
-    #     loader_val = DataLoader(data_val, batch_size=args.batch_size)
-    #
-    #     # set loss function and optimization algorithm
-    #     criterion = ClassBalanceLoss(args.class_count, 2, 'sigmoid', 0.99, 1.0)
-    #     optimizer = optim.Adam(model.parameters(), lr=0.1)
-    #     lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
-    #
-    #     # train model
-    #     if args.use_cuda:
-    #         model.cuda()
-    #     acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, epochs=args.nb_epochs,
-    #                                 early_stop=False, use_cuda=args.use_cuda)
-    #
-    #     # access performance on validation set
-    #     pred_y, true_y = model.predict(loader_val, proba=True)
-    #     scores = compute_metrics(true_y, pred_y)
-    #
-    #     # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
-    #     # model
-    #     torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss,
-    #                 'val_performance': scores.to_dict()},
-    #                args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_fold" + str(fold) + ".pkl")
-    #
-    #     try:
-    #         # try to import pyplot
-    #         import matplotlib.pyplot as plt
-    #
-    #         # show the position of the anchor points as a histogram
-    #         anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_oli.size(1) - 1)
-    #         anchor = anchor.detach().numpy()
-    #         fig = plt.figure()
-    #         plt.hist(anchor, bins=ref_oli.size(1))
-    #         plt.xlabel('Position')
-    #         plt.ylabel('# Anchor Points')
-    #         plt.title('Distribution of anchor points')
-    #         # plt.show()
-    #         plt.savefig(args.outdir + "/anchor_positions_fold" + str(fold) + ".png")
-    #
-    #     except:
-    #         print("Cannot import matplotlib.pyplot")
+    # perform 5-fold stratified cross-validation using the predefined folds
+    for fold_nb, fold in enumerate(folds):
+        # store training and validation indices for the current fold
+        args.train_indices, args.val_indices = fold[0], fold[1]
+
+        # initialize con model
+        model = CON(in_channels=len(args.alphabet), out_channels_list=args.out_channels, filter_sizes=args.kernel_sizes,
+                    strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
+                    kernel_args=[args.sigma, args.scale, args.alpha], scaler=args.preprocessor, pool_global=None)
+
+        # get labels of each entry for stratified shuffling and distribution of classes for class balance loss
+        args.class_count, args.expected_loss, _ = count_classes_hiv(args.filepath, True, data_all.drug_nb[args.drug],
+                                                                    args.num_classes)
+
+        # set arguments for the DataLoader
+        loader_args = {}
+        if args.use_cuda:
+            loader_args = {'num_workers': 1, 'pin_memory': True}
+
+        # Creating PyTorch data Subsets using the indices for the current fold
+        data_train = Subset(data_all, args.train_indices)
+        data_val = Subset(data_all, args.val_indices)
+
+        # create PyTorch DataLoader for training and validation data
+        loader_train = DataLoader(data_train, batch_size=args.batch_size, shuffle=False, **loader_args)
+        loader_val = DataLoader(data_val, batch_size=args.batch_size, shuffle=False, **loader_args)
+
+        # initialize optimizer and loss function
+        if args.num_classes == 2:
+            criterion = ClassBalanceLoss(args.class_count, args.num_classes, 'sigmoid', 0.99, 1.0)
+        else:
+            criterion = ClassBalanceLoss(args.class_count, args.num_classes, 'cross_entropy', 0.99, 1.0)
+        optimizer = optim.Adam(model.parameters(), lr=0.1, weight_decay=1e-6)
+        lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
+
+        # train model
+        if args.use_cuda:
+            model.cuda()
+        acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, epochs=args.nb_epochs,
+                                    early_stop=False, use_cuda=args.use_cuda, kmeans_init='kmeans++',
+                                    distance='euclidean')
+
+        # compute performance metrices on validation data
+        pred_y, true_y = model.predict(loader_val, proba=True, use_cuda=args.use_cuda)
+        scores = compute_metrics(true_y, pred_y)
+
+        # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+        # model
+        torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss,
+                    'val_performance': scores.to_dict()},
+                   args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_fold" + str(fold_nb) + ".pkl")
+
+        try:
+            # try to import pyplot
+            import matplotlib.pyplot as plt
+
+            # show the evolution of the acc and loss
+            fig2, axs2 = plt.subplots(2, 2)
+            axs2[0, 0].plot(acc['train'])
+            axs2[0, 0].set_title("train accuracy")
+            axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
+            axs2[0, 1].plot(acc['val'])
+            axs2[0, 1].set_title("val accuracy")
+            axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
+            axs2[1, 0].plot(loss['train'])
+            axs2[1, 0].set_title("train loss")
+            axs2[1, 0].set(xlabel='epoch', ylabel='loss')
+            axs2[1, 1].plot(loss['val'])
+            axs2[1, 1].set_title("val loss")
+            axs2[1, 1].set(xlabel='epoch', ylabel='loss')
+            # plt.show()
+            plt.savefig(args.outdir + "/acc_loss.png")
+
+            # show the position of the anchor points as a histogram
+            anchor = (torch.acos(model.oligo.pos_anchors[:, 0]) / np.pi) * (len(data_all.data[0]) - 1)
+            anchor = anchor.detach().cpu().numpy()
+            fig3 = plt.figure()
+            fig3.set_size_inches(w=20, h=10)
+            plt.hist(anchor, bins=range(len(data_all.data[0])))
+            # plt.xlim([0, ref_oli.size(1)])
+            plt.xlabel('Position')
+            plt.ylabel('# Anchor Points')
+            plt.title('Distribution of anchor points')
+            # plt.show()
+            plt.savefig(args.outdir + "/anchor_positions.png")
+
+        except ImportError:
+            print("Cannot import matplotlib.pyplot")
+
+        except Exception as e:
+            print("Unexpected error while trying to plot training visualisation:")
+            print(e)
 
 
 def train_encode(args):
@@ -642,7 +518,7 @@ def train_encode(args):
         train_ids = [args.encodeset]
 
     # create ENCODE dataset handle
-    data_all = EncodeHandler(args.filepath, kmer_size=args.kmer_size)
+    data_all = EncodeHandler(args.filepath, kmer_size=args.kmer_size, encode='onehot')
 
     # iterate over all ids used in this trainings round
     for tfid in train_ids:
@@ -654,17 +530,6 @@ def train_encode(args):
 
         # update the dataset to the correct transcription factor
         data_all.update_dataset(tfid)
-
-        # create dictionary that maps kmers to index
-        kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
-
-        # build tensor holding reference positions
-        ref_pos = build_kmer_ref_from_list(data_all.data, kmer_dict, args.kmer_size)
-
-        # initialize con model
-        model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
-                     strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
-                     kernel_args=[args.sigma, args.scale])
 
         # Creating data indices for training and validation splits:
         validation_split = .2
@@ -693,14 +558,22 @@ def train_encode(args):
         # get distribution of classes for class balance loss
         args.class_count, args.expected_loss = count_classes_encode(data_all.labels, True)
 
+        # initialize CON model
+        model = CON(in_channels=len(args.alphabet), out_channels_list=args.out_channels, filter_sizes=args.kernel_sizes,
+                    strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
+                    kernel_args=[args.sigma, args.scale, args.alpha], scaler=args.preprocessor, pool_global=None)
+
         # initialize optimizer and loss function
         criterion = nn.BCEWithLogitsLoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.1)
+        optimizer = optim.Adam(model.parameters(), lr=0.1, weight_decay=1e-6)
         lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
 
         # train model
+        if args.use_cuda:
+            model.cuda()
         acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
-                                    epochs=args.nb_epochs)
+                                    epochs=args.nb_epochs, early_stop=False, use_cuda=args.use_cuda,
+                                    kmeans_init='kmeans++', distance='euclidean')
 
         # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
         # model
@@ -726,69 +599,27 @@ def train_encode(args):
             axs2[1, 1].set_title("val loss")
             axs2[1, 1].set(xlabel='epoch', ylabel='loss')
             # plt.show()
-            plt.savefig(args.outdir + "/acc_loss_" + tfid + ".png")
+            plt.savefig(args.outdir + "/acc_loss.png")
 
             # show the position of the anchor points as a histogram
-            anchor = (torch.acos(model.oligo.weight[:, 0]) / np.pi) * (ref_pos.size(1) - 1)
-            anchor = anchor.detach().numpy()
+            anchor = (torch.acos(model.oligo.pos_anchors[:, 0]) / np.pi) * (len(data_all.data[0]) - 1)
+            anchor = anchor.detach().cpu().numpy()
             fig3 = plt.figure()
-            plt.hist(anchor, bins=ref_pos.size(1))
+            fig3.set_size_inches(w=20, h=10)
+            plt.hist(anchor, bins=range(len(data_all.data[0])))
+            # plt.xlim([0, ref_oli.size(1)])
             plt.xlabel('Position')
             plt.ylabel('# Anchor Points')
             plt.title('Distribution of anchor points')
             # plt.show()
-            plt.savefig(args.outdir + "/anchor_positions_" + tfid + ".png")
+            plt.savefig(args.outdir + "/anchor_positions.png")
 
-        except:
+        except ImportError:
             print("Cannot import matplotlib.pyplot")
 
-
-def test_encode(datapath, modelpath):
-    # create ENCODE data handler
-    data = EncodeHandler(datapath)
-
-    # initialize list that will store the test performance for each tfid
-    test_scores = []
-
-    # iterate over tfids and compute test performance for each tfid
-    for tfid in data.tfids:
-        print('\n\n================================\nEvaluation of {}\n================================\n'.format(tfid))
-
-        # load training results
-        print('loading dataset and initialize trained CON model...')
-        result_dict = torch.load(modelpath + tfid + "/CON_results_epochs_500.pkl")
-        args = result_dict['args']
-
-        # update data handler for current tfid
-        data.update_dataset(tfid, split='test')
-        loader = DataLoader(data, batch_size=args.batch_size)
-
-        # initialize the trained model
-        kmer_dict = kmer2dict(args.kmer_size, args.alphabet)
-        ref_pos = build_kmer_ref_from_list(data.data, kmer_dict, args.kmer_size)
-        model = CON2(out_channels_list=args.out_channels, ref_kmerPos=ref_pos, filter_sizes=args.kernel_sizes,
-                     strides=args.strides, paddings=args.paddings, num_classes=args.num_classes,
-                     kernel_args=[args.sigma, args.scale])
-
-        # load the trained model state dictionary
-        model.load_state_dict(result_dict['state_dict'])
-
-        # compute predictions on test data
-        print('calculating predictions of trained model on test data... please hold...')
-        pred_y, true_y = model.predict(loader, proba=True)
-
-        # compute statistics for current tfid
-        scores = compute_metrics(true_y, pred_y)
-        test_scores.append(scores)
-
-        print('\nStatistics:')
-        print(scores)
-
-    # calculate average dataframe using result frames of all tfids
-    import pandas as pd
-    df_concat = pd.concat(test_scores)
-    print('\n\n================================\nAveraged Statistics\n================================\n')
-    print(df_concat.groupby(level=0).mean())
+        except Exception as e:
+            print("Unexpected error while trying to plot training visualisation:")
+            print(e)
 
 
 def main():
@@ -796,8 +627,7 @@ def main():
     args = load_args()
 
     if args.type == 'HIV':
-        #train_hiv()
-        train_hiv_steiner(args)
+        train_hiv(args)
     elif args.type == 'ENCODE':
         train_encode(args)
     else:
