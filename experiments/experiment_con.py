@@ -28,7 +28,7 @@ from Bio import SeqIO
 # MACROS
 
 NAME = 'CON_experiment'
-DATA_DIR = './data/'
+DATA_DIR = '../data/'
 
 
 # extend custom data handler for the used dataset
@@ -188,7 +188,7 @@ def load_args():
                         help="output path(default: '')")
     parser.add_argument("--use-cuda", action='store_true', default=True, help="use gpu (default: False)")
     parser.add_argument("--noise", type=float, default=0.0, help="perturbation percent")
-    parser.add_argument("--file", dest="filepath", default="./data/hivdb/", type=str,
+    parser.add_argument("--file", dest="filepath", default="./data/hivdb", type=str,
                         help="path to the file containing the dataset.")
     parser.add_argument("--extension", dest="extension", default="fasta", type=str,
                         help="extension of the file containing the dataset (default fasta)")
@@ -223,7 +223,7 @@ def load_args():
             raise ValueError('preprocessor must be either an Integer or one of the following strings: standard_row, '
                              'standard_column')
 
-    # for an HIV experiment, also store the type of antiviral drug
+    # for a HIV experiment, also store the type of antiviral drug
     if args.type == 'HIV':
         if args.drug in ['FPV', 'ATV', 'IDV', 'LPV', 'NFV', 'SQV', 'TPV', 'DRV']:
             args.drug_type = 'PI'
@@ -231,7 +231,13 @@ def load_args():
             args.drug_type = 'NRTI'
         else:
             args.drug_type = 'NNRTI'
-        args.filepath += '{}_DataSet.fasta'.format(args.drug_type)
+
+        # add the correct file to the given filepath
+        args.filepath = args.filepath.rstrip(os.path.sep) + '{}{}_DataSet.fasta'.format(os.path.sep, args.drug_type)
+
+    # for an ENCODE experiment, make sure that the path to the datafiles does not have a trailing path separator
+    elif args.type == 'ENCODE':
+        args.filepath = args.filepath.rstrip(os.path.sep)
 
     # set the random seeds
     torch.manual_seed(args.seed)
@@ -374,8 +380,9 @@ def train_hiv(args):
     # load indices for 5-fold cross-validation
     fold_filepath = args.filepath.split('/')[:-1]
     fold_filepath = '/'.join(fold_filepath) + '/hivdb_stratifiedFolds.pkl'
-    folds = pickle.load(fold_filepath)
-    folds = folds[args.drug_type][args.drug]
+    with open(fold_filepath, 'rb') as in_file:
+        folds = pickle.load(in_file)
+        folds = folds[args.drug_type][args.drug]
 
     # perform 5-fold stratified cross-validation using the predefined folds
     for fold_nb, fold in enumerate(folds):

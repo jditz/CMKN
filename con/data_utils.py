@@ -396,7 +396,7 @@ class CONDataset(data.Dataset):
 
 
 class EncodeLoader(object):
-    """ Custom loader handling the ENCODE dataset used in 'B. Alipanahi, A. Delong, M. T. Weirauch, and B. J. Frey.
+    """ Custom loader handling the ENCODE dataset published in 'B. Alipanahi, A. Delong, M. T. Weirauch, and B. J. Frey.
     Predicting the sequence specificities of DNA- and RNA-binding proteins by deep learning. Nature Biotechnology,
     doi:10.1038/nbt.3300'
     """
