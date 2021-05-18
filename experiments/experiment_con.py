@@ -171,8 +171,9 @@ def load_args():
     parser.add_argument("--alpha", dest="alpha", default=1, type=int,
                         help="alpha parameter used in the exponential function of the oligo layer; if set to -1, the "
                              "value will be depending on the number of oligomers (default: -1)")
-    parser.add_argument("--scale", dest="scale", default=100, type=int,
-                        help="scaling parameter for the oligo kernel layer (Default: 100)")
+    parser.add_argument("--scale", dest="scale", default=-1, type=int,
+                        help="scaling parameter for the oligo kernel layer (default: -1). If set to -1, the scaling "
+                             "parameter will be determined depending on the length of the input sequences.")
     parser.add_argument("--num-classes", dest="num_classes", default=2, type=int,
                         help="number of classes in the prediction task")
     parser.add_argument("--kfold", dest="kfold", default=5, type=int, help="k-fold cross validation (default: 5)")
@@ -370,6 +371,10 @@ def train_hiv(args):
 
     # load data
     data_all = CustomHandler(args.filepath, kmer_size=args.kmer_size, drug=args.drug, encode='onehot')
+
+    # determine if oligo kernel's scale parameter should be set depending on sequence length
+    if args.scale == -1:
+        args.scale = len(data_all.data[0]) * (len(data_all.data[0]) / 10)
 
     # set random seeds
     torch.manual_seed(args.seed)
