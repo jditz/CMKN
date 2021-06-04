@@ -12,16 +12,17 @@
 
 from .model import CON
 from .utils import (
-    find_kmer_positions, kmer2dict, anchors_to_motivs, category_from_output, build_kmer_ref_from_file,
+    find_kmer_positions, kmer2dict, category_from_output, build_kmer_ref_from_file,
     build_kmer_ref_from_list, compute_metrics, register_hooks, plot_grad_flow, Hook, ClassBalanceLoss,
-    anchor_weight_matrix, model_interpretation, create_consensus, oli2number, matrix_inverse_sqrt
+    create_consensus, oli2number, matrix_inverse_sqrt
 )
 from .data_utils import CONDataset
+from .interpretability import seq2pwm, model_interpretation, anchors_to_motivs
 
 MODEL = ['CON', 'CONDataset', 'ClassBalanceLoss']
 UTIL = ['find_kmer_positions', 'kmer2dict', 'build_kmer_ref_from_file', 'build_kmer_ref_from_list',
-        'category_from_output', 'compute_metrics', 'anchors_to_motivs', 'anchor_weight_matrix',
-        'model_interpretation', 'create_consensus', 'oli2number', 'matrix_inverse_sqrt']
+        'category_from_output', 'compute_metrics', 'create_consensus', 'oli2number', 'matrix_inverse_sqrt']
+INTERPRETATION = ['model_interpretation', 'seq2pwm', 'anchors_to_motivs']
 DEBUG = ['register_hooks', 'plot_grad_flow', 'Hook']
 
-__all__ = MODEL + UTIL + DEBUG
+__all__ = MODEL + UTIL + INTERPRETATION + DEBUG
