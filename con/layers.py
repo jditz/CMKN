@@ -16,8 +16,6 @@ from sklearn.linear_model._base import LinearModel, LinearClassifierMixin
 
 from .utils import kernels, matrix_inverse_sqrt, kmeans, EPS, normalize_, ClassBalanceLoss
 
-import matplotlib.pyplot as plt
-
 
 class CONLayer(nn.Conv1d):
     """ Convolutional Oligo Kernel Network Layer
@@ -280,29 +278,12 @@ class CONLayer(nn.Conv1d):
 
         # calculate the convolution between oligomer encoding of the input and oligomer encoding of the anchor points
         x_out = super(CONLayer, self).forward(x_in)
-        #aux1 = super(CONLayer, self).forward(x_in)
 
         # calculate convolution between positions of the input sequence and anchor point positions
         pos_out = F.conv1d(pos_in, self.pos_anchors, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
         # evaluate kernel function with the result
         x_out = self.kappa(pos_out, x_out)
-
-        #bsize = x_in.shape[0]
-        #torch.save({'posConv{}'.format(bsize): aux, 'oliConv{}'.format(bsize): oli_out, 'kappa{}'.format(bsize): x_out},
-        #           'data/debug/convLayer_tensors_batchsize{}.pkl'.format(bsize))
-        #fig, axs = plt.subplots(3)
-        #im1 = axs[0].imshow(aux1[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
-        #im2 = axs[1].imshow(pos_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
-        #im3 = axs[2].imshow(x_out[0, :, :].detach().numpy(), interpolation=None, aspect='auto')
-        #fig.colorbar(im1, ax=axs[0])
-        #fig.colorbar(im2, ax=axs[1])
-        #fig.colorbar(im3, ax=axs[2])
-        #plt.show()
-
-        #plt.figure()
-        #plt.imshow(self.weight.detach().numpy())
-        #plt.show()
 
         return x_out
 
@@ -351,13 +332,14 @@ class CONLayer(nn.Conv1d):
         return x_out
 
     def normalize_(self):
-        """ Function to enforce the constraints on the anchor points and alphanet's weights. The kernel function is
-        valid iff all weights are normalized (, point to discrete sequence positions,) and the corresponding oligomers
-        are encoded by alphanet.weight.
+        """ Function to enforce the constraints on the anchor points. The kernel function is valid iff all anchor point
+        positions have unit l2-norm and each anchor point motif is a valid PWM.
         """
-        # make sure all oligomer anchor points are positive and have unit l2-norm
-        self.weight.data.clamp_(0)
-        norm = self.weight.data.view(self.out_channels, -1).norm(p=2, dim=-1).view(-1, 1, 1)
+        # make sure the motifs of all oligomers are valid PWMs by
+        #   1. make sure each number is positive
+        #   2. make sure each column of the motif sums to one
+        self.weight.data.clamp_(min=0)
+        norm = self.weight.data.norm(p=1, dim=1).view(-1, 1, self.filter_size)
         norm.clamp_(min=EPS)
         self.weight.data.div_(norm)
 
