@@ -9,11 +9,7 @@
 
 import math
 
-import torch
-from torch.autograd import Variable
 import numpy as np
-from scipy import optimize
-from scipy.stats import chi2
 
 from .data_utils import ALPHABETS
 
@@ -215,7 +211,7 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
     return image_matrix, (norm_oligomers, idx_oliSort), (norm_positions, idx_posSort)
 
 
-def anchors_to_motivs(anchor_points, positions, type="DNA_FULL", outdir=""):
+def anchors_to_motivs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
     """Motiv creation
 
     This function takes a list of anchor points, learned by the oligo kernel layer of a CON, and returns the motivs that
@@ -228,8 +224,13 @@ def anchors_to_motivs(anchor_points, positions, type="DNA_FULL", outdir=""):
         :param anchor_points: Tensor containing the oligomers corresponding to each anchor points, learned by an oligo
                               kernel layer (i.e. the tensor that can be accessed by model.oligo.weight)
             :type anchor_points: Tensor
-        :param positions: List of positions of each oligomer
-            :type positions: List
+        :param type: Specifies whether the result will be a DNA or a Protein motif
+            :type type: String
+        :param outdir: Destination where the motifs will be stored
+            :type outdir: String
+        :param eps: Values below this threshold will be set to 0. This threshold can be used to eliminate parts of the
+                    motif that do not hold any information.
+            :type eps: Float
     """
     # import needed libraries
     import matplotlib as mpl
@@ -312,6 +313,19 @@ def anchors_to_motivs(anchor_points, positions, type="DNA_FULL", outdir=""):
 
     # iterate through the anchor points
     for anchor in range(anchor_points.shape[0]):
+        print('creating motif for anchor {}...'.format(anchor))
+
+        # store current anchor as a numpy array
+        cur_anchor = anchor_points[anchor, :, :].cpu().numpy()
+
+        # remove all values that are below the threshold
+        cur_anchor[cur_anchor < eps] = 0
+
+        # make sure each column has still unit l1 norm, i.e. the anchor is still a valid PWM
+        aux_norm = np.linalg.norm(cur_anchor, ord=1, axis=0)
+        aux_norm[aux_norm == 0] = 1e-6
+        cur_anchor = cur_anchor / aux_norm
+
         # initialize list that will store tuples of (sequence, scale)
         #   -> these are all sequences involved in the motiv with their corresponding scale variable
         all_scores = []
@@ -325,8 +339,8 @@ def anchors_to_motivs(anchor_points, positions, type="DNA_FULL", outdir=""):
             # iterate over all characters in the alphabet and check if they contribute to the current position of the
             # anchor oligomer
             for char in range(anchor_points.shape[1]):
-                if anchor_points[anchor, char, pos] != 0:
-                    scores.append((ALPHABETS[type][0][char], anchor_points[anchor, char, pos].cpu().numpy()))
+                if cur_anchor[char, pos] != 0:
+                    scores.append((ALPHABETS[type][0][char], cur_anchor[char, pos]))
 
             all_scores.append(scores)
 
@@ -346,5 +360,5 @@ def anchors_to_motivs(anchor_points, positions, type="DNA_FULL", outdir=""):
         plt.xlim((0, x))
         plt.ylim((0, maxi))
         plt.tight_layout()
-        plt.savefig(outdir + "/motif_anchor_" + str(positions[anchor]).zfill(3) + ".png")
+        plt.savefig(outdir + str(anchor).zfill(3) + "-anchor.png")
         plt.close(fig)
