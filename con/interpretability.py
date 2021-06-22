@@ -7,6 +7,7 @@
 # Contact: ditz@informatik.uni-tuebingen.de    #
 ################################################
 
+import os
 import math
 
 import numpy as np
@@ -241,6 +242,13 @@ def anchors_to_motivs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
 
     from .data_utils import ALPHABETS
 
+    # if the outdir does not exist, create it
+    if not os.path.exists(outdir):
+        try:
+            os.makedirs(outdir)
+        except:
+            pass
+
     # initialize needed functionality
     fp = FontProperties(family="Arial", weight="bold")
     globscale = 1.35
@@ -276,7 +284,7 @@ def anchors_to_motivs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
                    "W": TextPath((-0.48, 0), "W", size=1, prop=fp),
                    "F": TextPath((-0.305, 0), "F", size=1, prop=fp),
                    "M": TextPath((-0.415, 0), "M", size=1, prop=fp),
-                   "X": TextPath((-0.35, 0), "N", size=1, prop=fp)}
+                   "X": TextPath((-0.35, 0), "X", size=1, prop=fp)}
         COLOR_SCHEME = {'G': 'darkgreen',
                         'S': 'darkgreen',
                         'T': 'darkgreen',
@@ -360,5 +368,6 @@ def anchors_to_motivs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
         plt.xlim((0, x))
         plt.ylim((0, maxi))
         plt.tight_layout()
-        plt.savefig(outdir + str(anchor).zfill(3) + "-anchor.png")
+        plt.axis('off')
+        plt.savefig(outdir + str(anchor).zfill(3) + "-anchor.png", bbox_inches='tight')
         plt.close(fig)
