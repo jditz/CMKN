@@ -22,7 +22,7 @@ class CONLayer(nn.Conv1d):
 
     This class implements one layer of a convolutional Oligo Kernel Network (CON).
     """
-    def __init__(self, in_channels, out_channels, kmer_length, padding=0, dilation=1, groups=1, subsampling=1,
+    def __init__(self, in_channels, out_channels, kmer_length, padding='SAME', dilation=1, groups=1, subsampling=1,
                  kernel_func="exp_oli", kernel_args=(1, 1, 1), kernel_args_trainable=False):
         """Constructor of a CON layer
 
