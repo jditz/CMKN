@@ -1,17 +1,37 @@
-#############################################################
-# Utility functions for convolutional oligo kernel networks #
-#                                                           #
-# Author: Jonas Ditz                                        #
-# Contact: ditz@informatik.uni-tuebingen.de                 #
-#############################################################
+"""Module containing auxiliary functions used in different parts of the CMKN implementation.
 
-import math
+Classes:
+    ClassBalanceLoss: An PyTorch-friendly implementation of the class-balance loss.
+    MatrixInverseSqrt: Extension for PyTorch's Autograd module to incorporate the inverse square root of a matrix.
+
+Functions:
+    find_kmer_position: Utility to localize k-mers within a sequence.
+    kmer2dict: Utility to create a mapping of k-mers onto integers.
+    oli2tensor: Utility to convert a sequence into a 2-dimensional tensor.
+    create_consensus: Utility to create the consensus sequence for a given set of sequences.
+    build_kmer_ref_from_file: Utility to compute the starting frequencies for each k-mer at every position of a set of
+        sequences stored in a file.
+    build_kmer_ref_from_list: Utility to compute the starting frequencies for each k-mer at every position of a set of
+        sequences stored in a list.
+    category_from_output: Utility to select highest class from an output.
+    normalize_: Utility to normalize a matrix in a stable manner.
+    exp_motif: Exponential part of the convolutional motif kernel.
+    kmeans: Tensor-friendly (i.e. GPU-friendly) implementation of the k-Means algorithm. K-Means++ is supported.
+    compute_metrics: Compute different performance metrics for a prediction output.
+
+Attributes:
+    EPS: A macro for relative tolerance.
+    kernels: Dictionary to simplify access to different kernel methods
+
+Authors:
+    Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
+"""
+
 import numpy as np
 from itertools import combinations, product
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.autograd import Variable
 from Bio import SeqIO
 
 import pandas as pd
@@ -27,28 +47,21 @@ EPS = 1e-4
 
 
 def find_kmer_positions(sequence, kmer_dict, kmer_size):
-    """Utility to localize k-meres
+    """Utility to localize k-mers
 
-    This function takes a sequences and returns a list of positions for each k-mer of
-    the alphabet.
+    This function takes a sequences and returns a list of positions for each k-mer of the alphabet.
 
-    - **Parameters**::
+    Args:
+        sequence (:obj:`str`): Input sequence which is used to generate list of k-mer positions.
+        kmer_dict (:obj:`dict`): Dictionary mapping each possible k-mer to an integer.
+        kmer_size (:obj:`int`): Size of the k-meres.
 
-        :param sequence: Input sequences which is used to generate list of k-mer positions.
-            :type sequence: string
-        :param kmer_dict: Dictionary mapping each possible k-mer to an integer.
-            :type kmer_dict: dictionary
-        :param kmer_size: Size of the k-meres.
-            :type kmer_size: integer
+    Returns:
+        List containing a list of positions for each k-mer.
 
-    - **Returns**::
-
-        :return positions: List containing a list of positions for each k-mer.
-            :rtype positions: list
-
-    - **Raises**::
-
-        :raise ValueError: If one of the sequences was not build using the specified alphabet.
+    Raises:
+        ValueError: If the input sequence contains a k-mer that is not part of the k-mer dictionary, i.e. the sequence
+            and the dictionary were build with different alphabets.
     """
 
     # initialize list of lists, where each list will hold the starting positions of one specific k-mer
@@ -62,9 +75,9 @@ def find_kmer_positions(sequence, kmer_dict, kmer_size):
             #   -> if k-mere is not part of the dictionary, the sequence is not created using the specified
             #      alphabet
             if sequence[x:y] not in kmer_dict:
-                raise ValueError('Substring \'' + sequence[x:y] + '\' not found in k-mere dictionary!\n' +
+                raise ValueError('Substring \'' + sequence[x:y] + '\' not found in k-mer dictionary!\n' +
                                  '            The sequence ' +
-                                 '\'{}\' was NOT build using the specified alphabet.'.format(sequence))
+                                 '\'{}\' and kmer_dict were build with different alphabets.'.format(sequence))
 
             # append start position of the current k-mer to the corresponding list of positions
             positions[kmer_dict.get(sequence[x:y])].append(x)
@@ -73,23 +86,17 @@ def find_kmer_positions(sequence, kmer_dict, kmer_size):
 
 
 def kmer2dict(kmer_size, alphabet):
-    """Utility to create k-mere mapping
+    """Utility to create k-mer mapping
 
-    This function takes an alphabet and a integer k and returns a dictionary that maps each k-mer
-    (that can be created using the specified alphabet) to an integer. This dictionary can than be
-    used to create input features for CON.
+    This function takes an alphabet and an integer k and returns a dictionary that maps each k-mer (that can be created
+    using the specified alphabet) to an integer. This dictionary can than be used to create input features for CON.
 
-    - **Parameters**::
+    Args:
+        kmer_size (:obj:`int`): Size of the k-meres.
+        alphabet (:obj:`str`): Alphabet used to generate the k-meres.
 
-        :param kmer_size: Size of the k-meres.
-            :type kmer_size: integer
-        :param alphabet: Alphabet used to generate the k-meres.
-            :type alphabet: list (of chars)
-
-    - **Returns**::
-
-        :return kmer_dict: Dictionary mapping each k-mer to an integer.
-            :rtype kmer_dict: dictionary
+    Returns:
+        Dictionary mapping each k-mer to an integer.
     """
 
     # initialize an empty dictionary
@@ -105,28 +112,24 @@ def kmer2dict(kmer_size, alphabet):
 def oli2number(seq, kmer_dict, kmer_size, ambi='DNA'):
     """Utility to translate a string into a tensor
 
-    This function takes a sequence represented by a string and returns an tensor, where each oligomer starting in the
-    sequence is encoded by a 2-dimensional vector at the corresponding position
+    This function takes a sequence represented by a string and returns an tensor, where each k-mer starting in the
+    sequence is encoded by a 2-dimensional vector at the corresponding position.
 
-    - **Parameters**::
+    Args:
+        seq (:obj:`str`): Input sequence which is used to generate list of k-mer positions.
+        kmer_dict (:obj:`dict`): Dictionary mapping each possible k-mer to an integer.
+        kmer_size (:obj:`int`): Size of the k-meres.
+        ambi (:obj:`str`): String indicating the alphabet from which the ambiguous character should be chosen. Defaults
+            to 'DNA'.
 
-        :param seq: Input sequences which is used to generate list of k-mer positions.
-            :type seq: string
-        :param kmer_dict: Dictionary mapping each possible k-mer to an integer.
-            :type kmer_dict: dictionary
-        :param kmer_size: Size of the k-meres.
-            :type kmer_size: integer
-        :param ambi: String indicating the alphabet from which the ambiguous character should be chosen
-            :type ambi: string
+    Returns:
+        Tensor encoding k-mers starting at each position of seq.
 
-    - **Returns**::
-
-        :return positions: Tensor encoding oligomers starting at each position of seq.
-            :rtype positions: Tensor (2 x len(seq))
-
-    - **Raises**::
-
-        :raise ValueError: If one of the sequences was not build using the specified alphabet.
+    Raises:
+        ValueError: If an unknown alphabet was selected for the ambi argument. Currently only 'DNA' and 'PROTEIN' are
+            supported.
+        ValueError: If the input sequence contains a k-mer that is not part of the k-mer dictionary, i.e. the sequence
+            and the dictionary were build with different alphabets.
     """
 
     # select the correct ambiguous character
@@ -134,7 +137,7 @@ def oli2number(seq, kmer_dict, kmer_size, ambi='DNA'):
         ambi = 'N'
     elif ambi == 'PROTEIN':
         ambi = 'X'
-    else:
+    elif ambi != 'N' and ambi != 'X':
         raise ValueError('Error in create_consensus: Please set ambi to either DNA or PROTEIN.')
 
     # store the length of the sequence
@@ -153,9 +156,9 @@ def oli2number(seq, kmer_dict, kmer_size, ambi='DNA'):
         #   -> if k-mere is not part of the dictionary, the sequence is not created using the specified
         #      alphabet
         if seq[i:i+kmer_size] not in kmer_dict:
-            raise ValueError('Substring \'' + seq[i:i+kmer_size] + '\' not found in k-mere dictionary!\n' +
+            raise ValueError('Substring \'' + seq[i:i+kmer_size] + '\' not found in k-mer dictionary!\n' +
                              '            The sequence ' +
-                             '\'{}\' was NOT build using the specified alphabet.'.format(seq))
+                             '\'{}\' and kmer_dict were build with different alphabets.'.format(seq))
 
         # update tensor with the number of the starting oligomer
         oli_tensor[0, i] = np.cos((kmer_dict.get(seq[i:i+kmer_size]) / len(kmer_dict)) * np.pi)
@@ -169,6 +172,22 @@ def create_consensus(sequences, extension=None, ambi='DNA'):
 
     This utility function takes sequences, either stored in a file readable by Biopython or in a list, and creates a
     consensus sequence.
+
+    Args:
+        sequences (:obj:`str` or :obj:`list` of :obj:`str`): Path to Biopython-readable file containing the sequences
+            or a list of sequences.
+        extension (:obj:`str`): If sequences are provided in a file, this argument has to be set to the file extension.
+            Defaults to None.
+        ambi (:obj:`str`): String indicating the alphabet from which the ambiguous character should be chosen. Defaults
+            to 'DNA'.
+
+    Returns:
+        The consensus sequence of the set of sequences provided as input.
+
+    Raises:
+        ValueError: If an unknown alphabet was selected for the ambi argument. Currently only 'DNA' and 'PROTEIN' are
+            supported.
+        ValueError: If extension argument is not set even though the sequences are provided in a file.
     """
 
     # select the correct ambiguous character
@@ -221,16 +240,14 @@ def build_kmer_ref_from_file(filepath, extension, kmer_dict, kmer_size):
     This function uses a specified training set of sequences and creates a tensor that stores for each position the
     frequency of k-mers (k = kmer_size) starting at that position.
 
-    - **Parameters**::
+    Args:
+        filepath (:obj:`str`): Path to the file that contains the dataset.
+        extension (:obj:`str`): Extension of the dataset file (needed for Biopython's SeqIO routine).
+        kmer_dict (:obj:`dict`): Dictionary mapping each k-mer to an integer.
+        kmer_size (:obj:`int`): Size of the k-mers (k = kmer_size).
 
-        :param filepath: Path to the file that contains the dataset
-            :type filepath: String
-        :param extension: Extension of the dataset file (needed for Biopython's SeqIO routine)
-            :type extension: String
-        :param kmer_dict: Dictionary mapping each k-mer to an integer.
-            :type kmer_dict: dictionary
-        :param kmer_size: Size of the k-mers (k = kmer_size).
-            :type kmer_size: Integer
+    Returns:
+        Tensor containing the starting frequency for each k-mer at each sequence position
     """
     # get the length of the sequences in the dataset by first reading only the first entry
     first_record = next(SeqIO.parse(filepath, extension))
@@ -266,14 +283,16 @@ def build_kmer_ref_from_list(seq_list, kmer_dict, kmer_size):
     This function uses a specified training set of sequences and creates a tensor that stores for each position the
     frequency of k-mers (k = kmer_size) starting at that position.
 
-    - **Parameters**::
+    Args:
+        seq_list (:obj:`list` of :obj:`str`): List containing each sequences as a string.
+        kmer_dict (:obj:`dict`): Dictionary mapping each k-mer to an integer.
+        kmer_size (:obj:`int`): Size of the k-mers (k = kmer_size).
 
-        :param seq_list: List containing all sequences of the dataset
-            :type seq_list: List of String
-        :param kmer_dict: Dictionary mapping each k-mer to an integer.
-            :type kmer_dict: dictionary
-        :param kmer_size: Size of the k-mers (k = kmer_size).
-            :type kmer_size: Integer
+    Returns:
+        Tensor containing the starting frequency for each k-mer at each sequence position
+
+    Raises:
+        ValueError: If the sequences are not of the same length.
     """
 
     # check whether all sequences have the same length
@@ -313,53 +332,17 @@ def build_kmer_ref_from_list(seq_list, kmer_dict, kmer_size):
 def category_from_output(output):
     """Output selector
 
-    This helper function returns the class with highest probability from the CON output.
+    This auxiliary function returns the class with highest probability from the CON output.
 
-    - **Parameters**::
+    Args:
+        output (Tensor): Output of a PyTorch model.
 
-        :param output: Output of a CON network.
-            :type output: tensor
-
-    - **Returns**::
-
-        :return category_i: Index of the category with the highest probability.
-            :rtype category_i: integer
+    Returns:
+        Index of the category with the highest probability.
     """
     top_n, top_i = output.topk(1)
     category_i = top_i[0].item()
     return category_i
-
-
-def gaussian_filter_1d(size, sigma=None):
-    """1D Gaussian filter
-
-    This function creates a 1D Gaussian filter mask used for pooling in a CKN layer.
-
-    - **Parameters**::
-
-        :param size: Size of the pooling filter
-            :type size: Integer
-        :param sigma: Parameter of the Gaussian function
-            :type sigma: Float
-
-    - **Returns**::
-
-        :return Mask for a pooling layer based on a Gaussian function
-            :rtype Tensor
-    """
-    # if the filter is of size 1, no Gaussian is needed
-    if size == 1:
-        return torch.ones(1)
-
-    # if sigma is not specified, initialize sigma dependent on the filter size
-    if sigma is None:
-        sigma = (size - 1.)/(2.*math.sqrt(2))
-
-    # build the filter mask
-    m = float((size - 1) // 2)
-    filt = torch.arange(-m, m+1)
-    filt = torch.exp(-filt.pow(2)/(2.*sigma*sigma))
-    return filt/torch.sum(filt)
 
 
 def normalize_(x, p=2, dim=-1):
@@ -367,13 +350,15 @@ def normalize_(x, p=2, dim=-1):
 
     Auxiliary function implementing numerically stable matrix normalization.
 
-    :param x: Input tensor
-    :param p: Indicates the order of the norm
-    :param dim: If it is an int, vector norm will be calculated, if it is 2-tuple of ints, matrix norm will be
-                calculated. If the value is None, matrix norm will be calculated when the input tensor only has two
-                dimensions, vector norm will be calculated when the input tensor only has one dimension. If the input
-                tensor has more than two dimensions, the vector norm will be applied to last dimension.
-    :return: Normalized input tensor
+    Args:
+        x (Tensor): Input tensor..
+        p (:obj:`int`): Indicates the order of the norm
+        dim (:obj:`int`): If it is an int, vector norm will be calculated, if it is 2-tuple of ints, matrix norm will be
+            calculated. If the value is None, matrix norm will be calculated when the input tensor only has two
+            dimensions, vector norm will be calculated when the input tensor only has one dimension. If the input
+            tensor has more than two dimensions, the vector norm will be applied to last dimension.
+    Returns:
+        Normalized input tensor.
     """
     norm = x.norm(p=p, dim=dim, keepdim=True)
     x.div_(norm.clamp(min=EPS))
@@ -388,21 +373,17 @@ def normalize_(x, p=2, dim=-1):
 def exp_func(x, sigma=1, scale=1):
     """ Exponential part of the oligo kernel
 
-    This helper function implements the exponential part of the oligo kernel function. The scaling parameter can be
-    set to accommodate for the difference between the oligo kernel and the oligo kernel network.
+    This auxiliary function implements the exponential part of the oligo kernel function. The scaling parameter can be
+    set to accommodate for differences in absolute position distances due to different encoding stategies for positional
+    information.
 
-    - **Parameters**::
+    Args:
+        x (:obj:`float`): Input to the oligo kernel function.
+        sigma (:obj:`float`): Degree of positional uncertainty.
+        scale (:obj:`float`): Scaling parameter to accommodate for different positional information encodings.
 
-        :param x: Input to the oligo kernel function.
-            :type x: Float
-        :param sigma: Degree of positional uncertainty.
-            :type sigma: Float
-        :param scale: Scaling parameter to accommodate for the oligo kernel network formulation.
-            :type scale: Float
-
-    - **Returns**::
-
-        :returns same shape tensor as x
+    Returns:
+        Result of the exponential function as a tensor with the same shape of the input tensor.
     """
     return torch.exp(scale/(2*sigma**2) * (x-1.))
 
@@ -420,30 +401,21 @@ def add_exp(x, alpha):
     return 0.5 * (exp_func2(x, alpha) + x)
 
 
-def exp_oli(x, y, length=1, sigma=1, scale=1, alpha=10000):
+def exp_motif(x, y, length=1, sigma=1, scale=1, alpha=1):
     """Exponential activation function for the oligo layer
 
-    This helper function implements the exponential activation function used in the oligo layer kernel function
-    formulation.
+    This auxiliary function implements the exponential activation function used in the motif layer kernel function.
 
-    - **Parameters**::
+    Args:
+        x (Tensor): Positional input for the motif kernel function.
+        y (Tensor): Motif comparison input for the motif kernel function.
+        length (:obj:`int`): Length of the motif.
+        sigma (:obj:`float`): Degree of positional uncertainty.
+        scale (:obj:`float`): Scaling parameter to accommodate for different positional information encodings.
+        alpha (:obj:`float`): Degree of impact of inexact motif matching.
 
-        :param x: Input (convolution of input position with anchor points) to the oligo kernel function.
-            :type x: Tensor
-        :param y: Input (convolution of oligomer encoding tensors) to the oligo kernel function
-            :type y: Tensor
-        :param length: Length of the oligomers.
-            :type length: Int
-        :param sigma: Degree of positional uncertainty.
-            :type sigma: Float
-        :param scale: Scaling parameter to accommodate for the oligo kernel network formulation.
-            :type scale: Float
-        :param alpha: Parameter to switch off unwanted position pairings
-            :type alpha: Float
-
-    - **Returns**::
-
-        :returns same shape tensor as x
+    Returns:
+        Result of the motif kernel function as a tensor with the same shape as the input tensors.
     """
     return torch.exp((alpha**2 * (y-length)) + (scale/(2*sigma**2) * (x-1.)))
 
@@ -455,7 +427,7 @@ kernels = {
     "exp": exp_func,
     "exp_chen": exp_func2,
     "add_exp_chen": add_exp,
-    "exp_oli": exp_oli
+    "exp_oli": exp_motif
 }
 
 
@@ -470,21 +442,19 @@ class ClassBalanceLoss(nn.Module):
     Reference: Yin Cui, Menglin Jia, Tsung-Yi Lin, Yang Song, Serge Belongie; Proceedings of the IEEE/CVF Conference on
                Computer Vision and Pattern Recognition (CVPR), 2019, pp. 9268-9277
     """
+
     def __init__(self, samples_per_cls, no_of_classes, loss_type, beta, gamma, reduction='mean'):
         """Constructor of the class-balance loss class
 
-        - **Parameters**::
+        Args:
+            samples_per_cls (:obj:`list` of :obj:`int`): List containing the number of samples per class in the dataset.
+            no_of_classes (:obj:`int`): Number of classes in the classification problem.
+            loss_type (:obj:`str`): Loss function used for the class-balance loss.
+            beta (:obj:`float`): Hyperparameter for class-balanced loss.
+            gamma (:obj:`float`): Hyperparameter for Focal loss
 
-            :param samples_per_cls: List containing the number of samples per class in the dataset
-                :type samples_per_cls: List of Integers
-            :param no_of_classes: Number of classes
-                :type no_of_classes: Integer
-            :param loss_type: Loss function used for the class-balance loss
-                :type loss_type: String
-            :param beta: Hyperparameter for Class balanced loss.
-                :type beta: Float
-            :param gamma: Hyperparameter for Focal loss
-                :type gamma: Float
+        Raises:
+            ValueError: If len(samples_per_cls) != no_of_classes
         """
         # call constructor of parent class
         super(ClassBalanceLoss, self).__init__()
@@ -509,18 +479,13 @@ class ClassBalanceLoss(nn.Module):
         class.
         pt = p (if true class), otherwise pt = 1 - p. p = sigmoid(logit).
 
-        - **Parameters**::
+        Args:
+            labels (Tensor): True label of each sample given as a tensor of shape (batch_size x num_classes).
+            logits (Tensor): Output of the network given as a tensor of shape (batch_size x num_classes).
+            alpha (Tensor): Per-example weight for balanced cross entropy given as a tensor of shape (batch_size).
 
-            :param labels: Tensor containing the true labels
-                :type labels: float tensor of size [batch, num_classes].
-            :param logits: Tensor containing the output of the network
-                :type logits: float tensor of size [batch, num_classes].
-            :param alpha: Tensor specifying per-example weight for balanced cross entropy.
-                :type alpha: float tensor of size [batch_size]
-
-        - **Returns**::
-
-            :returns a float32 scalar representing normalized total loss.
+        Returns:
+            A float32 scalar representing normalized total loss.
         """
         BCLoss = F.binary_cross_entropy_with_logits(input=logits, target=labels, reduction="none")
 
@@ -540,19 +505,18 @@ class ClassBalanceLoss(nn.Module):
     def forward(self, logits, labels):
         """Compute the Class Balanced Loss between `logits` and the ground truth `labels`.
 
-        Class Balanced Loss: ((1-beta)/(1-beta^n))*Loss(labels, logits)
-        where Loss is one of the standard losses used for Neural Networks.
+        Class Balanced Loss: ((1-beta)/(1-beta^n))*Loss(labels, logits) where Loss is one of the standard losses used
+        for Neural Networks.
 
-        - **Parameters**::
+        Args:
+            logits (Tensor): Output of the network given as a tensor of shape (batch_size x num_classes).
+            labels (Tensor): True label of each sample given as a tensor of shape (batch_size x num_classes).
 
-            :param logits: Tensor containing the output of the network
-                :type logits: float tensor of size [batch, num_classes].
-            :param labels: Tensor containing the true labels
-                :type labels: float tensor of size [batch].
+        Returns:
+            A float tensor representing class balanced loss.
 
-        - **Returns**::
-
-            :returns a float tensor representing class balanced loss
+        Raises:
+            ValueError: If an unknown loss function was specified during initialization of the ClassBalanceLoss object.
         """
         effective_num = 1.0 - np.power(self.beta, self.samples_per_cls)
         weights = (1.0 - self.beta) / np.array(effective_num)
@@ -673,26 +637,19 @@ def matrix_inverse_sqrt(input, eps=1e-2):
 # KMEANS/KMEANS++
 #############################################################################
 
-def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='cosine'):
+def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='euclidean'):
     """Initialization method for K-Means (k-Means++)
 
-    - **Parameters**::
+    Args:
+        x (Tensor): Data that will be used for clustering provided by a tensor of shape (n_samples x n_dimensions).
+        n_clusters (:obj:`int`): Number of clusters that will be computed.
+        n_local_trials (:obj:`int`): Number of local seeding trails. Defaults to None.
+        use_cuda (:obj:`bool`): Flag that determines whether computations should be performed on the GPU. Defaults to
+            False.
+        distance (:obj:`str`): Distance measure used for clustering. Defaults to 'euclidean'.
 
-        :param x: Data that will be used for clustering
-            :type x: Tensor (n_samples x n_dimensions)
-        :param n_clusters: Number of clusters that will be computed
-            :type n_clusters: Integer
-        :param n_local_trials: Number of local seeding trails
-            :type n_local_trials: Integer
-        :param use_cuda: Flag that determines whether computations should be performed on the GPU
-            :type use_cuda: Boolean
-        :param distance: Distance measure used for clustering
-            :type distance: String
-
-    . **Returns**::
-
-        :returns clusters: Initial centers for each cluster
-            :rtype clusters: Tensor (n_clusters x n_dimensions)
+    Returns:
+        Initial centers for each cluster.
     """
     n_samples, n_features = x.size()
 
@@ -762,29 +719,19 @@ def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='c
 def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, init=None, tol=1e-4):
     """Performing k-Means clustering (Lloyd's algorithm) with Tensors utilizing GPU resources.
 
-    - **Parameter**::
+    Args:
+        x (Tensor): Data that will be used for clustering provided as a tensor of shape (n_samples x n_dimensions).
+        n_clusters (:obj:`int`): Number of clusters that will be computed.
+        distance (:obj:`str`): Distance measure used for clustering. Defaults to 'euclidean'.
+        max_iters (:obj:`int`): Maximal number of iterations used in the K-Means clustering. Defaults to 100.
+        verbose (:obj:`bool`): Flag to activate verbose output. Defaults to True.
+        init (:obj:`str`): Initialization process for the K-Means algorithm. Defaults to None.
+        tol (:obj:`float`): Relative tolerance with regards to Frobenius norm of the difference in the cluster centers
+            of two consecutive iterations to declare convergence. It's not advised to set `tol=0` since convergence
+            might never be declared due to rounding errors. Use a very small number instead. Defaults to 1e-4.
 
-        :param x: Data that will be used for clustering
-            :type x: Tensor (n_samples x n_dimensions)
-        :param n_clusters: Number of clusters that will be computed
-            :type n_clusters: Integer
-        :param distance: Distance measure used for clustering
-            :type distance: String
-        :param max_iters: Maximal number of iterations used in the K-Means clustering
-            :type max_iters: Integer
-        :param verbose: Flag to activate verbose output
-            :type verbose: Boolean
-        :param init: Initialization process for the K-Means algorithm
-            :type init: String
-        :param tol: Relative tolerance with regards to Frobenius norm of the difference in the cluster centers of two
-                    consecutive iterations to declare convergence. It's not advised to set `tol=0` since convergence
-                    might never be declared due to rounding errors. Use a very small number instead.
-            :type tol: Float
-
-    - **Returns**::
-
-        :returns clusters: Cluster centers calculated by the K-Means algorthim
-            :rtype clusters: Tensor (n_clusters x n_dimensions)
+    Returns:
+        Cluster centers calculated by the K-Means algorithm provided as a tensor of shape (n_clusters x n_dimensions).
     """
     # make sure there are more samples than requested clusters
     if x.shape[0] < n_clusters:
@@ -935,6 +882,15 @@ def get_roc(y_true, y_pred, cutoff):
 
 
 def compute_metrics(y_true, y_pred):
+    """Compute standard performance metrics for predictions of a trained model.
+
+    Args:
+        y_true (Tensor): True label for each sample provided as a tensor of shape (n_sample x n_classes).
+        y_pred (Tensor): Predicted label for each sample provided as a tensor of shape (n_samples x n_classes).
+
+    Returns:
+        Different performance metrics for the provided predictions as a Pandas DataFrame.
+    """
     y_true, y_pred = np.asarray(y_true), np.asarray(y_pred)
     metric = {}
     metric['log.loss'] = log_loss(y_true, y_pred)

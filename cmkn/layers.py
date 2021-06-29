@@ -1,10 +1,17 @@
-################################################
-# Python class containing the object holding   #
-# network layers for CON models.               #
-#                                              #
-# Author: Jonas Ditz                           #
-# Contact: ditz@informatik.uni-tuebingen.de    #
-################################################
+"""Module that contains different layers that can be used to construct a convolutional motif kernel network (CMKN).
+
+Classes:
+    CMKNLayer: Implementation of the convolutional motif kernel. A network must contain at least one CMKNLayer to be a
+        valid CMKN.
+    GlobalAvg1D: Layer that implements a global average pooling.
+    GlobalMax1D: Layer that implements a global max pooling.
+    GlobalSum1D: Layer that implements a global sum pooling.
+    LinearMax: Layer that implements a more complex linear classification in comparison to standard fully connected
+        layers.
+
+Authors:
+    Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
+"""
 
 import torch
 from torch import nn
@@ -17,38 +24,31 @@ from sklearn.linear_model._base import LinearModel, LinearClassifierMixin
 from .utils import kernels, matrix_inverse_sqrt, kmeans, EPS, normalize_, ClassBalanceLoss
 
 
-class CONLayer(nn.Conv1d):
-    """ Convolutional Oligo Kernel Network Layer
+class CMKNLayer(nn.Conv1d):
+    """ Convolutional Motif Kernel Network Layer
 
-    This class implements one layer of a convolutional Oligo Kernel Network (CON).
+    This class implements one layer of a convolutional Motif Kernel Network (CMKN).
     """
+
     def __init__(self, in_channels, out_channels, kmer_length, padding='SAME', dilation=1, groups=1, subsampling=1,
                  kernel_func="exp_oli", kernel_args=(1, 1, 1), kernel_args_trainable=False):
-        """Constructor of a CON layer
+        """Constructor of a CMKN layer
 
-                - **Parameters**::
-
-                    :param in_channels: Number of input channels (aka size of the used alphabet)
-                        :type in_channels: Integer
-                    :param out_channels: Number of output channels of the layer (aka number of anchor points)
-                        :type out_channels: Integer
-                    :param kmer_length: Length of the oligomers investigated (aka the kernel size of the convolutional layer)
-                        :type kmer_length: Integer
-                    :param padding: Used padding type
-                        :type padding: String or Integer
-                    :param dilation: Controls the spacing between the kernel points; also known as the à trous algorithm
-                        :type dilation: Integer (Default: 1)
-                    :param groups: Controls the connections between inputs and outputs
-                        :type groups: Integer (Default: 1)
-                    :param subsampling: Controls the amount of subsampling in the current layer
-                        :type subsampling: Integer (Default: 1)
-                    :param kernel_func: Specified the kernel function that is used in the current layer
-                        :type kernel_func: String (Default: "exp_oli")
-                    :param kernel_args: All parameters of the kernel function. The parameters have to be given in the order
-                                        [sigma, scale, alpha].
-                        :type kernel_args: Tuple (Default: (1, 1, 1))
-                    :param kernel_args_trainable: Specifies if the kernel arguments are trainable
-                        :type kernel_args_trainable: Boolean
+        Args:
+            in_channels (:obj:`int`): Number of input channels (aka size of the used alphabet)
+            out_channels (:obj:`int`): Number of output channels of the layer (aka number of anchor points)
+            kmer_length (:obj:`int`): Length of the oligomers investigated (aka the kernel size of the convolutional
+                layer)
+            padding (:obj:`str`): Used padding type
+            dilation (:obj:`int`): Controls the spacing between the kernel points; also known as the à trous algorithm.
+                Defaults to 1.
+            groups (:obj:`int`): Controls the connections between inputs and outputs. Defaults to 1.
+            subsampling (:obj:`int`): Controls the amount of subsampling in the current layer. Defaults to 1.
+            kernel_func (:obj:`str`): Specified the kernel function that is used in the current layer. Defaults to
+                'exp_oli'.
+            kernel_args (:obj:`tuple` of :obj:`int`): All parameters of the kernel function. The parameters have to be
+                given in the order (sigma, scale, alpha). Defaults to (1, 1, 1).
+            kernel_args_trainable (:obj:`bool`): Specifies if the kernel arguments are trainable
         """
         # set padding parameter dependent on the selected padding type
         if padding == "SAME":
@@ -57,8 +57,8 @@ class CONLayer(nn.Conv1d):
             self.padding_length = None
 
         # initialize the parent class
-        super(CONLayer, self).__init__(in_channels, out_channels, kernel_size=kmer_length, padding=0,
-                                       dilation=dilation, groups=groups, bias=False)
+        super(CMKNLayer, self).__init__(in_channels, out_channels, kernel_size=kmer_length, padding=0,
+                                        dilation=dilation, groups=groups, bias=False)
 
         # set parameters
         self.subsampling = subsampling
@@ -92,101 +92,93 @@ class CONLayer(nn.Conv1d):
         #      y = oligomer tensor
         self.kappa = lambda x, y: kernel_func(x, y, kmer_length, *self.kernel_args)
 
-        # set the kernel function used for computing the linear transformation factor
-        #kernel_func_lintrans = kernels["exp"]
-        #self.kappa_lintrans = lambda x: kernel_func_lintrans(x, *self.kernel_args[0:2])
+    def sample_oligomers(self, x_in, n_sampling_kmers=1000, include_pos=False):
+        """Sample k-mers from the given Tensor.
 
-    def sample_oligomers(self, x_in, n_sampling_oligomers=1000, include_pos=False):
-        """Sample oligomers from the given Tensor. These oligomers will be used as input to the spherical k-Means
-        algorithm that is used during initialization of the network.
+        K-mers sampled by this function will be the input to the spherical k-Means algorithm that is used during
+        initialization of the network.
 
-        - **Parameters**::
+        Args:
+            x_in (Tensor): One-hot encoding representation of a sequence. The format of the Tensor has to be
+                (batch_size x self.in_channels x seq_len).
+            n_sampling_kmers (:obj:`int`): Number of k-mers to sample from the input sequence.
+            include_pos: Determine whether sampled k-mers should include positional information.
 
-            :param x_in: One-hot encoding representation of a sequence
-                :type x_in: Tensor (batch_size x self.in_channels x seq_len)
-            :param n_sampling_oligomers: Number of patches to sample
-                :type n_sampling_oligomers: Integer
-            :param include_pos: Determine whether sampled oligomers should include positional information
-                :type include_pos: Boolean
-
-        - **Returns**::
-
-            oligomers: (batch_size x (H - filter_size + 1)) x (in_channels x filter_size)
+        Returns:
+            Sampled k-mers (with or without positional information) provided as a Tensor of dimensions
+            (batch_size x (H - filter_size + 1)) x (in_channels x filter_size).
         """
-        # unfold the input tensor to create oligomers of the desired length
-        oligomers = x_in.unfold(-1, self.filter_size, 1).transpose(1, 2)
+        # unfold the input tensor to create k-mers of the desired length
+        kmers = x_in.unfold(-1, self.filter_size, 1).transpose(1, 2)
 
-        # flatten the one-hot encodings of each oligomer and combine batch size and sequence length into a single
+        # flatten the one-hot encodings of each k-mer and combine batch size and sequence length into a single
         # dimension
-        #   -> this allows to easily sample oligomers of the desired length across the batch and the whole length of
+        #   -> this allows to easily sample k-mers of the desired length across the batch and the whole length of
         #      the sequence
-        oligomers = oligomers.contiguous().view(-1, self.patch_dim)
+        kmers = kmers.contiguous().view(-1, self.patch_dim)
 
-        # add positional information to each oligomer if requested
-        #   -> since the contiguous() function will put the sorted oligomers of each input sequence next to each other,
-        #      we can still add the positional information to each oligomer by simply replicating the list
+        # add positional information to each k-mer if requested
+        #   -> since the contiguous() function will put the sorted k-mers of each input sequence next to each other,
+        #      we can still add the positional information to each k-mer by simply replicating the list
         #      [0 : sequence_length] a number of times equal to the batch size and concatenate this tensor with the
-        #      oligomer tensor at dimension 1
+        #      k-mer tensor at dimension 1
         if include_pos:
-            pos_info = oligomers.new_tensor(list(range(x_in.shape[-1] - (self.filter_size - 1))) * x_in.shape[0])
+            pos_info = kmers.new_tensor(list(range(x_in.shape[-1] - (self.filter_size - 1))) * x_in.shape[0])
             pos_info = torch.cos((pos_info / x_in.shape[-1]) * np.pi)
-            oligomers = torch.cat([oligomers, pos_info.view(-1, 1)], dim=1)
+            kmers = torch.cat([kmers, pos_info.view(-1, 1)], dim=1)
 
-        # make sure to only sample at most the number of oligomers that are presented in the current batch
-        n_sampling_oligomers = min(oligomers.size(0), n_sampling_oligomers)
+        # make sure to only sample at most the number of k-mers that are presented in the current batch
+        n_sampling_kmers = min(kmers.size(0), n_sampling_kmers)
 
-        # sample random indices of the oligomer tensor (number of sampled indices is either the maximum number of
-        # oligomers or n_sampling_oligomers, whatever is smaller)
-        indices = torch.randperm(oligomers.size(0))[:n_sampling_oligomers]
-        oligomers = oligomers[indices]
+        # sample random indices of the k-mer tensor (number of sampled indices is either the maximum number of
+        # k-mers or n_sampling_kmers, whatever is smaller)
+        indices = torch.randperm(kmers.size(0))[:n_sampling_kmers]
+        kmers = kmers[indices]
 
-        # normalize the oligomers only if no positional information was added
+        # normalize the k-mers only if no positional information was added
         if not include_pos:
-            normalize_(oligomers)
-        return oligomers
+            normalize_(kmers)
+        return kmers
 
-    def initialize_weights(self, distance, oligomers, seq_len, init=None, max_iters=100):
-        """Initialization of CONLayer's weights and alphanet's weights
+    def initialize_weights(self, distance, motifs, seq_len, init=None, max_iters=100):
+        """Initialization of CMKNLayer's weights and attribute 'pos_anchors'
 
-        The anchor points of the CON layer will be equidistantly distributed over the whole length of the sequence.
-        Afterwards, the buffer alphanet will be set to the corresponding oligomer encodings stored in self.kmer_ref.
+        Perform a k-means clustering on a set of motifs or motif-position pairs. The cluster centers will be used to
+        initialize CMKNLayer's weight and pos_anchor attributes. If only motifs are given, the cosine distance should
+        be used for clustering. Otherwise, euclidean distance has to be used. If no positional information is provided,
+        all motifs will be equidistantly distributed over the length of the sequences.
 
-        - **Parameters**::
+        Args:
+            distance (:obj:`str`): Distance measure used in the k-Means algorithm.
+            motifs (Tensor): Motifs or motif-position pairs that will be used to initialize the oligomer anchor points
+                using the k-Means algorithm. The tensor has dimensionality (n_sampling_oligomers x self.patch_dim).
+            seq_len (:obj:`int`): Length of the sequences used as input to the initialization process.
+            init (:obj:`str`): Initialization parameter for the spherical k-Means algorithm. Defaults to None
+            max_iters (:obj:`int`): Maximal number of iterations used in the K-Means clustering.
 
-            :param distance: Distance measure used in the k-Means algorithm
-                :type distance: String
-            :param oligomers: Oligomers that will be used to initialize the oligomer anchor points using a spherical
-                              k-Means algorithm
-                :type oligomers: Tensor (n_sampling_oligomers x self.patch_dim)
-            :param seq_len: Length of the sequences used as input to the initialization process
-                :type seq_len: Integer
-            :param init: Initialization parameter for the spherical k-Means algorithm
-                :type init: String
-            :param max_iters: Maximal number of iterations used in the K-Means clustering
-                :type max_iters: Integer
-
-        - **Updates**::
-
-            self.weight (out_channels x in_channels): These represent the oligomer anchor points
-            self.pos_anchors (out_channels x 2): These represent the encoded position anchor points
+        Updates:
+            self.weight (out_channels x in_channels): These represent the motif of anchor points
+            self.pos_anchors (out_channels x 2): These represent the encoded position of anchor points
         """
-        # perform spherical kmeans algorithm on the given oligomer-position tensors
-        oli_tensor = kmeans(oligomers, self.out_channels, distance=distance, init=init, max_iters=max_iters)
+        # perform spherical k-means algorithm on the given motif tensor or motif-position tensor
+        motif_tensor = kmeans(motifs, self.out_channels, distance=distance, init=init, max_iters=max_iters)
 
-        # seperate oligomers and positions
+        # separate motifs and positions
         if distance == 'euclidean':
-            pos_tensor = oli_tensor[:, -1]
-            oli_tensor = oli_tensor[:, :-1]
+            pos_tensor = motif_tensor[:, -1]
+            motif_tensor = motif_tensor[:, :-1]
 
             # convert position tensor into sequence positions
             pos_tensor = (torch.acos(pos_tensor) / np.pi) * (seq_len - 1)
         else:
+            # if no positional information is provided, equidistantly distribute the anchor points over the length of
+            # the sequence
             dist = seq_len / self.out_channels
-            pos_tensor = oli_tensor.new_tensor([dist / 2 + i * dist for i in range(self.out_channels)])
+            pos_tensor = motif_tensor.new_tensor([dist / 2 + i * dist for i in range(self.out_channels)])
 
-        # update the oligomer weights with the computed cluster centers
-        oli_tensor = oli_tensor.view_as(self.weight)
-        self.weight.data = oli_tensor.data
+        # update the layer's weights with the computed cluster centers
+        motif_tensor = motif_tensor.view_as(self.weight)
+        self.weight.data = motif_tensor.data
 
         # convert sequence position into 2-dimensional vectors with unit l-2 norm
         pos_anchors = self.pos_anchors.new_zeros(self.out_channels, 2)
@@ -194,7 +186,7 @@ class CONLayer(nn.Conv1d):
             pos_anchors[i, 0] = torch.cos((pos_tensor[i] / seq_len) * np.pi)
             pos_anchors[i, 1] = torch.sin((pos_tensor[i] / seq_len) * np.pi)
 
-        # update the position anchor points
+        # update the positional information of anchor points
         pos_anchors = pos_anchors.view_as(self.pos_anchors)
         self.pos_anchors.data = pos_anchors.data
         self._need_lintrans_computed = True
@@ -202,24 +194,21 @@ class CONLayer(nn.Conv1d):
     def train(self, mode=True):
         """ Toggle train mode
 
-        This function extends the train mode toggle functionality to CON layers.
+        This function extends the train mode toggle functionality to CMKN layers.
 
-        - **Paramters**::
-
-            :param mode: Input that indicates whether the train mode should be enabled or disabled
-                :type mode: Boolean
+        Args:
+            mode (:obj:`bool`): Input that indicates whether the train mode should be enabled or disabled.
         """
-        super(CONLayer, self).train(mode)
+        super(CMKNLayer, self).train(mode)
         if self.training is True:
             self._need_lintrans_computed = True
 
     def _compute_lintrans(self):
         """Compute the linear transformation factor kappa(ZtZ)^(-1/2)
 
-        - **Returns**::
-
-            :return lintrans: Linear transformation factor
-                :rtype lintrans: tensor (out_channels x out_channels)
+        Returns:
+            Returns the linear transformation factor needed for the Nyström method as a tensor  of shape
+            (self.out_channels x self.out_channels)
         """
         # return the current linear transformation factor, if no new factor needs to be computed
         if not self._need_lintrans_computed:
@@ -245,17 +234,14 @@ class CONLayer(nn.Conv1d):
     def _conv_layer(self, x_in):
         """Convolution layer
 
-        This layer computes the convolution: x_out = <phi(p), phi(Z)> * kappa(Zt p)
+        This function computes the convolution: x_out = <phi(p), phi(Z)> * kappa(Zt p)
 
-        - **Parameters**::
+        Args:
+            x_in (Tensor): Oligomer encoding of the input sequence. The input tensor has to be of shape
+                (batch_size x in_channels x seq_len).
 
-            :param x_in: Oligomer encoding of the input sequence
-                :type x_in: Tensor (batch_size x in_channels x |S|)
-
-        - **Returns**::
-
-            :return x_out: Result of the convolution
-                :rtype x_out: Tensor (batch_size x out_channels x |S|)
+        Returns:
+            Result of the convolution provided as a tensor of shape (batch_size x out_channels x seq_len)
         """
         # build the position tensor
         #   -> this tensor is only dependent on the length of the input sequence, therefore it can be created in the
@@ -277,7 +263,7 @@ class CONLayer(nn.Conv1d):
             x_in = torch.cat([x_in, x_in.new_zeros(x_in.shape[0], x_in.shape[1], self.padding_length)], dim=-1)
 
         # calculate the convolution between oligomer encoding of the input and oligomer encoding of the anchor points
-        x_out = super(CONLayer, self).forward(x_in)
+        x_out = super(CMKNLayer, self).forward(x_in)
 
         # calculate convolution between positions of the input sequence and anchor point positions
         pos_out = F.conv1d(pos_in, self.pos_anchors, padding=self.padding, dilation=self.dilation, groups=self.groups)
@@ -293,17 +279,13 @@ class CONLayer(nn.Conv1d):
         This layer multiplies the convolution output with the linear transformation factor:
         x_out = kappa(ZtZ)^(-1/2) x x_in
 
-        - **Parameters**::
+        Args:
+            x_in (Tensor): Result of the convolution provided as a tensor of shape
+                (batch_size x out_channels x seq_len).
+            lintrans (Tensor): Linear transformation factor provided as a tensor of shape (out_channels x out_channels).
 
-            :param x_in: Result of the convolution
-                :type x_in: Tensor (batch_size x out_channels x |S|)
-            :param lintrans: Linear transformation factor
-                :type lintrans: Tensor (out_channels x out_channels)
-
-        - **Returns**:
-
-            :return x_out: Result of the multiplication
-                :rtype x_out: Tensor (batch_size x out_channels x |S|)
+        Returns:
+            Result of the multiplication provided as a tensor of shape (batch_size x out_channels x seq_len).
         """
         batch_size, out_c, _ = x_in.size()
 
@@ -316,10 +298,9 @@ class CONLayer(nn.Conv1d):
     def forward(self, x_in):
         """Encode function for a CON layer
 
-        - **Parameters**::
-
-            :param x_in: one-hot encoding of the input sequence
-                :type x_in: Tensor (batch_size x in_channels x |S|)
+        Args:
+            x_in: One-hot encoding of the input sequence. This needs to be a tensor of shape
+                (batch_size x in_channels x seq_len)
         """
         # perform the convolution
         x_out = self._conv_layer(x_in)
@@ -332,10 +313,16 @@ class CONLayer(nn.Conv1d):
         return x_out
 
     def normalize_(self):
-        """ Function to enforce the constraints on the anchor points. The kernel function is valid iff all anchor point
-        positions have unit l2-norm and each anchor point motif is a valid PWM.
+        """ Function to enforce the constraints on the anchor points.
+
+        The kernel function is valid iff all anchor point positions have unit l2-norm and each anchor point motif is a
+        valid Position Weight Matrix (PWM).
+
+        Updates:
+            self.weight (out_channels x in_channels): These represent the motif of anchor points
+            self.pos_anchors (out_channels x 2): These represent the encoded position of anchor points
         """
-        # make sure the motifs of all oligomers are valid PWMs by
+        # make sure the motifs of all motifs are valid PWMs by
         #   1. make sure each number is positive
         #   2. make sure each column of the motif sums to one
         self.weight.data.clamp_(min=0)
@@ -343,7 +330,7 @@ class CONLayer(nn.Conv1d):
         norm.clamp_(min=EPS)
         self.weight.data.div_(norm)
 
-        # make sure all position anchor points have unit l2-norm
+        # make sure all position of anchor points have unit l2-norm
         norm = self.pos_anchors.data.view(self.out_channels, -1).norm(p=2, dim=-1).view(-1, 1, 1)
         norm.clamp_(min=EPS)
         self.pos_anchors.data.div_(norm)

@@ -1,11 +1,14 @@
-################################################
-# Python file containing functions and classes #
-# that are needed for the interpretability of  #
-# a trained CON model                          #
-#                                              #
-# Author: Jonas Ditz                           #
-# Contact: ditz@informatik.uni-tuebingen.de    #
-################################################
+"""Module that contains functions used to interpret a trained CMKN model.
+
+Functions:
+    seq2pwm: This function converts a sequence or a set of sequences into a position weight matrix (PWM).
+    model_interpretation: This function calculates the motif function values for a given sequence and each of the anchor
+        point motifs.
+    anchor_to_motivs: This function converts each of the anchor point motifs into png images.
+
+Authors:
+    Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
+"""
 
 import os
 import math
@@ -15,18 +18,26 @@ import numpy as np
 from .data_utils import ALPHABETS
 
 
-def seq2pwm(seq, alphabet='DNA'):
-    """This function takes sequences and an alphabet and returns the position weight matrix (PWM) of the set of
+def seq2pwm(seq, alphabet='DNA_FULL'):
+    """Converts sequences into a position weight matrix (PWM).
+
+    This function takes sequences and an alphabet and returns the position weight matrix (PWM) of the set of
     sequences. If only one sequence is provided, the one-hot encoding matrix of the sequence will be returned.
 
-    - **Parameters**::
+    Args:
+        seq : Input to the function which can be given as a single sequence provided as a :ob:`str`, a set of sequences
+            provided as a :ob:`list` of :obj:`str`, or a NumPy ndarray of dimension m x n, where m is the number of
+            sequences and n is the length of each sequence. If the input is a ndarray, each letter must be represented
+            by theír position in the alphabet (i.e. a number between 0 and |alphabet|-1)
+        alphabet (:obj:`str`): The alphabet that was used to build the input sequences. Defaults to 'DNA_FULL'.
 
-        :param seq: Input sequences
-            :type seq: List of Strings or
-                       m x n ndarray (m sequences of length n), each letter is represented by their position in the
-                       alphabet (i.e. a number between 0 and |alphabet|-1)
-        : param alphabet: The alphabet that was used to build the input sequences
-            :type alphabet: String
+    Returns:
+        The position weight matrix of the input sequences. If a single sequence was given, this will be the one-hot
+        encoding matrix of that sequence.
+
+    Raises:
+        ValueError: If sequences are of different length
+        ValueError: If the input was neither a :obj:`str`, :obj:`list`of :obj:`str`, or a ndarray
     """
 
     # get the alphabet
@@ -72,70 +83,31 @@ def seq2pwm(seq, alphabet='DNA'):
     return pwm
 
 
-def optimize_anchor(anchor_idx, con_layer, max_iter):
-    """This function uses a gradient based optimization algorithm to find the PWM-position pair that is closest to
-    the specified anchor under the geometry induced by the CON layer's kernel
-
-    - **Parameter**::
-
-        :param anchor_idx: Index of the anchor point (oligomer-position pair) used for the optimization
-            :type anchor_idx: Integer
-        :param con_layer: CON layer of a trained CON model
-            :type con_layer: con.CONLayer
-        :param max_iter: Maximal number of iterations during the optimization
-            :type max_iter: Integer
-
-    - **Returns**::
-
-        :returns: The optimized PWM-position pair together with the loss
-    """
-    pass
-
-
-def compute_pwm_position(model, max_iter=2000):
-    """This function takes a trained CON model and returns the PWM-position pairs that are closest to each anchor point
-    under the geometry induced by the convolutional oligo kernel.
-
-    - **Parameter**::
-
-        :param model: Trained CON model
-            :type model: con.CON
-        :param max_iter: Maximal number of iterations during the optimization
-    """
-
-
 def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, num_best=-1, viz=True):
     """Visual interpretation of the learned model
 
     This function converts the learned anchors into a 2d matrix where each row represents one motif and each column
-    represents a sequence position. This matrix can be visualized to get an image comparable to Figure 2 in
-    Meinicke et al., 2004. Furthermore, oligomers and positions will be ranked based on their importance
+    represents a sequence position. Each row is the discretized motif function of the corresponding anchor point over
+    the whole input sequence. This matrix can be visualized to get an image comparable to Figure 2 in
+    Meinicke et al., 2004. Furthermore, oligomers and positions will be ranked based on their importance. Importance
+    will be assessed using the l2-norm of corresponding columns or rows, respectively.
 
-    - **Parameters**::
+    Args:
+        seq (:obj:`str`): Input sequence for which the trained model should be visualized
+        anchors_oli (ndarray): Learned anchor motifs
+        anchors_pos (ndarray): Learned anchor positions
+        alphabet (:obj:`str`): Alphabet of the sequences used for training the model
+        :param sigma (:obj:`float`): sigma value used for the trained model
+        :param alpha (:obj:`float`): Scaling parameter for the oligomer/motif comparison kernel
+        :param num_best (:obj:`int`): Indicates how many of the most informative anchors should be showed. All anchors
+            are included, if set to -1.
+        :param viz (:obj:`bool`): Indicates whether the matrix should be visualized using matplotlib
 
-        :param seq: Input sequence for which the trained model should be visualized
-            :type seq: String or One-Hot Encoding matrix
-        :param anchors_oli: Learned anchor motifs
-            :type anchors_oli: ndarray (nb_anchors x |alphabet| x k)
-        :param anchors_pos: Learned anchor positions
-            :type anchors_pos: ndarray (nb_anchors x 2 x 1)
-        :param alphabet: Alphabet of the sequences used for training the model
-        :param sigma: sigma value used for the trained model
-            type sigma: Float
-        :param alpha: Scaling parameter for the oligomer/motif comparison kernel
-            :type alpha: Float
-        :param num_best: Indicates how many of the most informative anchors should be showed. All anchors are included,
-                         if set to -1.
-            :type num_best: Integer
-        :param viz: Indicates whether the matrix should be visualized using matplotlib
-            :type viz: Boolean
-
-    - **Returns**::
-
-        :returns: Matrix
-            :rtype: 2d NumPy array
+    Returns:
+        NumPy ndarray which will be the discretized motif function for each anchor point over the whole input sequence.
     """
     # if the sequence is given as a string, convert it into a one-hot encoding matrix
+    aux = seq
     if isinstance(seq, str):
         seq = seq2pwm(seq, alphabet)
 
@@ -157,10 +129,12 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
     for i in range(anchors_oli.shape[0]):
 
         # convert anchor position into discrete sequence positions with corresponding weights
-        weight1, pos1 = math.modf(positions[i])
+        weight2, pos1 = math.modf(positions[i])
         pos1 = int(pos1)
         pos2 = pos1 + 1
-        weight2 = 1 - weight1
+        weight1 = 1 - weight2
+
+        print(i, positions[i])
 
         # create the sequence motif of the input sequence at the current anchor position
         seq_motif = weight1 * seq[:, pos1:pos1+kmer_size] + weight2 * seq[:, pos2:pos2+kmer_size]
@@ -176,11 +150,11 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
                                         (1/(np.pi * sigma**2)) * ((j - positions[i])**2))
 
     # scale matrix between 0 and 1
-    image_matrix /= image_matrix.max()
+    #image_matrix /= image_matrix.max()
 
     # reduce noise in the matrix
-    below_threshold = image_matrix < 0.1
-    image_matrix[below_threshold] = 0
+    #below_threshold = image_matrix < 0.1
+    #image_matrix[below_threshold] = 0
 
     if num_best == -1:
         num_best = anchors_oli.shape[0]
@@ -212,26 +186,24 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
     return image_matrix, (norm_oligomers, idx_oliSort), (norm_positions, idx_posSort)
 
 
-def anchors_to_motivs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
-    """Motiv creation
+def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
+    """Motif image creation
 
-    This function takes a list of anchor points, learned by the oligo kernel layer of a CON, and returns the motivs that
+    This function takes a list of anchor points, learned by the oligo kernel layer of a CON, and returns the motifs that
     are represented by these anchor points.
 
     ATTENTION: Motifs generated by this function are not meant for scientific publications!
 
-    - **Parameters**::
+    Args:
+        anchor_points (Tensor): Tensor containing the oligomers corresponding to each anchor points, learned by an motif
+            kernel layer (i.e. the tensor that can be accessed by model.oligo.weight)
+        type (:obj:`str`): Specifies whether the result will be a DNA or a Protein motif. Defaults to 'DNA'
+        outdir (:obj:`str`): Destination where the motifs will be stored. Defaults to an empty string.
+        eps (:obj:`float`): Values below this threshold will be set to 0. This threshold can be used to eliminate parts
+            of the motif that do not hold any information.
 
-        :param anchor_points: Tensor containing the oligomers corresponding to each anchor points, learned by an oligo
-                              kernel layer (i.e. the tensor that can be accessed by model.oligo.weight)
-            :type anchor_points: Tensor
-        :param type: Specifies whether the result will be a DNA or a Protein motif
-            :type type: String
-        :param outdir: Destination where the motifs will be stored
-            :type outdir: String
-        :param eps: Values below this threshold will be set to 0. This threshold can be used to eliminate parts of the
-                    motif that do not hold any information.
-            :type eps: Float
+    Raises:
+        ValueError: If an unknown alphabet was chosen.
     """
     # import needed libraries
     import matplotlib as mpl
@@ -307,7 +279,7 @@ def anchors_to_motivs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
                         'M': 'black',
                         'X': 'brown'}
     else:
-        raise ValueError('Unknown alphabet type!')
+        raise ValueError('Unknown alphabet type: {}!'.format(type.split('_')[0]))
 
     def letterAt(letter, x, y, yscale=1, ax=None):
         text = LETTERS[letter]

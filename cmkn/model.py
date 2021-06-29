@@ -1,9 +1,12 @@
-################################################
-# Python class containing the CON model        #
-#                                              #
-# Author: Jonas Ditz                           #
-# Contact: ditz@informatik.uni-tuebingen.de    #
-################################################
+"""Module that contains a basic implementation of a convolutional motif kernel network (CMKN).
+
+Classes:
+    CMKN: A basic implementation of a CMKN that provides the user with a little bit of freedom in shaping the
+        architecture of the network. In this network, a single convolutional motif kernel layer will be used.
+
+Authors:
+    Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
+"""
 
 import torch
 from torch import nn
@@ -12,65 +15,54 @@ import torch.nn.functional as F
 from timeit import default_timer as timer
 import copy
 
-from .layers import POOLINGS, CONLayer, LinearMax
+from .layers import POOLINGS, CMKNLayer, LinearMax
 from .utils import category_from_output, ClassBalanceLoss
 
 
-class CON(nn.Module):
+class CMKN(nn.Module):
+    """Convolutional Motif Kernel Network
+
+    This class implements a simple example for a Convolutional Motif Kernel Network (CMKN). The model will consist of a
+    single CMKNLayer followed by a variational number of traditional convolutional layers (using convolutional layer is
+    optional). The classification can either be done with two fully connected layers or a combination of a global
+    pooling layer and a LinearMax layer.
     """
-    Convolutional Oligo Kernel Network
-    """
+
     def __init__(self, in_channels, out_channels_list, filter_sizes, strides, paddings, kernel_func=None,
                  kernel_args=None, kernel_args_trainable=False, alpha=0., fit_bias=True, batch_norm=True, dropout=False,
                  pool_global=None, pool_conv='mean', penalty='l2', scaler=None, num_classes=1, **kwargs):
         """Constructor of the CON class.
 
-        - **Parameters**::
+        Args:
+            in_channels (:obj:`int`): Dimensionality of the alphabet that generates the input sequences.
+            out_channels_list (:obj:`list` of :obj:`int`): Number of output channels of each layer (CMKNLayer and
+                Conv1d layer only).
+            filter_sizes (:obj:`list` of :obj:`int`): Size of the filter for each layer. For the CMKNLayer this
+                determines the length of motifs used for the kernel evaluation.
+            strides (:obj:`list` of :obj:`int`): List of stride factors for each Conv1d layer. For the CMKNLayer this
+                argument determines the subsampling property.
+            paddings (:obj:`list` of :obj:`str`): List of padding factors for the CMKNLayer and each Conv1d layer.
+            kernel_funcs (:obj:`str`): Specifies the kernel function used in the CMKNLayer. Defaults to None.
+            kernel_args_list (:obj:`tuple` of :obj:`int`): Tuple of arguments for the used kernel. Defaults to None.
+            kernel_args_trainable (:obj:`bool`): Indicates for the CMKNLayer if the kernel parameters used in this
+                layer are trainable.
+            alpha (:obj:`float`): Strength of the regularization in the classification layer (only used if the
+                classification layer is a LinearMax layer)
+            fit_bias (:obj:`bool`): Indicates whether the bias of the classification layer should be fitted.
+            batchNorm (:obj:`bool`): Indicates whether batch normalization should be used for Covd1d layers.
+            dropout (:obj:`bool`): Indicates whether Dropout should be used for Conv1d layers.
+            global_pool (:obj:`str`): Indicates which method should be used for global pooling.
+            pool_conv (:obj:`str`): Indicates the pooling layer used after each convolutional layer.
+            penalty (:obj:`str`): Indicates which penalty method should be used for regularization in the classification
+                layer (only used if the classfication layer is a LinearMax layer)
+            scaler: If set to a String, a LinearMixin layer will be used for classification and the String
+                specifies the used scalar, e.g. 'standard_row'. If set to an Integer, a standard fully
+                connected layer will be used for classification and the Integer determines the input
+                dimensionality of that layer.
+            num_classes (:obj:`int`): Number of classes in the current classification problem
 
-            :param in_channels: Dimensionality of the alphabet that generates the input sequences
-                :type in_channels: Integer
-            :param out_channels_list: Number of output channels of each layer
-                :type out_channels_list: List of Integer
-            :param filter_sizes: Size of the filter for each layer
-                :type filter_sizes: List of Integer
-            :param strides: List of stride factors for each pooling layer
-                :type strides: List of Integer
-            :param paddings: List of padding factors for each convolutional layer
-                :type paddings: List of String
-            :param kernel_funcs: Specifies the kernel function used in the CON layers
-                :type kernel_funcs: String (Default: None)
-            :param kernel_args_list: List of arguments for the used kernel.
-                :type kernel_args_list: List (Default: None)
-            :param kernel_args_trainable: List that indicates for each layer if the kernel parameters used in
-                                          this layer are trainable.
-                :type kernel_args_trainable: List of Boolean (Default: None)
-            :param alpha: Strength of the regularization in the classification layer (only used if the classification
-                          layer is a LinearMax layer)
-                :type alpha: Float
-            :param fit_bias: Indicates whether the bias of the classification layer should be fitted
-                :type fit_bias: Boolean (Default: True)
-            :param batchNorm: Indicates whether batch normalization should be used for convolutional layers.
-                :type batchNorm: Boolean (Default: True)
-            :param dropout: Indicates whether Dropout should be used for convolutional layers.
-                :type dropout: Boolean (Default: False)
-            :param pool_conv: Indicates the pooling layer used after each convolutional layer
-                :type pool_conv: String (Default: 'mean')
-            :param global_pool: Indicates which method should be used for global pooling
-                :type global_pool: String (Default: 'sum')
-            :param penalty: Indicates which penalty method should be used for regularization in the classification layer
-                            (only used if the classfication layer is a LinearMax layer)
-                :type penalty: String (Default: 'l2')
-            :param scaler: If set to a String, a LinearMixin layer will be used for classification and the String
-                           specifies the used scalar, e.g. 'standard_row'. If set to an Integer, a standard fully
-                           connected layer will be used for classification and the Integer determines the input
-                           dimensionality of that layer.
-                :type scaler: String or Integer
-            :param num_classes: Number of classes in the current classification problem
-                :type num_classes: Integer
-
-        - **Exceptions**::
-
-            :raise ValueError if out_channels_list, filter_sizes, and subsamplings are not of the same length.
+        Raises:
+            ValueError: If out_channels_list, filter_sizes, strides, and paddings are not of the same length.
         """
 
         # check if out_channels_list, strides, filter_sizes, and paddings have an acceptable length
@@ -81,7 +73,7 @@ class CON(nn.Module):
                              'length!')
 
         # initialize parent class
-        super(CON, self).__init__()
+        super(CMKN, self).__init__()
 
         # auxiliary variable to map the pooling choice onto a valid PyTorch layer
         poolings = {'mean': nn.AvgPool1d, 'max': nn.MaxPool1d, 'lpp': nn.LPPool1d, 'adaMax': nn.AdaptiveMaxPool1d,
@@ -102,10 +94,10 @@ class CON(nn.Module):
         # store value of parameter sigma for forward pass
         self.sigma = kernel_args[0]
 
-        # initialize the Oligo Kernel Layer
-        self.oligo = CONLayer(in_channels, out_channels_list[0], filter_sizes[0], padding=paddings[0],
-                              subsampling=strides[0], kernel_func=kernel_func, kernel_args=kernel_args,
-                              kernel_args_trainable=kernel_args_trainable, **kwargs)
+        # initialize the Convolutional Motif Kernel Layer
+        self.cmkn_layer = CMKNLayer(in_channels, out_channels_list[0], filter_sizes[0], padding=paddings[0],
+                                    subsampling=strides[0], kernel_func=kernel_func, kernel_args=kernel_args,
+                                    kernel_args_trainable=kernel_args_trainable, **kwargs)
 
         # initialize the additional "normal" convolutional layers if any should be used
         self.nb_conv_layers = len(out_channels_list) - 1
@@ -179,23 +171,22 @@ class CON(nn.Module):
         pass
 
     def normalize_(self):
-        """ Function to normalize the weights of each layer of the convolutional oligo kernel network
+        """ Function to access the normalization routine of the CMKNLayer
         """
-        self.oligo.normalize_()
+        self.cmkn_layer.normalize_()
 
     def representation(self, x_in, mask=None):
-        """ Function to combine CON layer and pooling layer evaluation
+        """ Function to combine CMKN layer and pooling layer evaluation
 
-        - **Parameters**::
-            :param x_in: Input to the model
-                :type x_in: Tensor (batch_size x |A| x |S|)
-            :param mask: Initial mask
+        Args:
+            x_in (Tensor): Input to the model given as a Tensor of size (batch_size x self.in_channels x seq_len)
+            mask (Tensor): Initial mask (usually not needed for CMKN models). Defaults to None
 
-        - **Returns**::
-
-            :return: Evaluation of the CON layer(s) with subsequent pooling using the given input
+        Returns:
+            Evaluation of the CMKN layer(s) with subsequent pooling using the given input. If no pooling layer was
+            specified, the function will return the flatten output of the convolutional layer(s).
         """
-        x_out = self.oligo(x_in)
+        x_out = self.cmkn_layer(x_in)
 
         if self.nb_conv_layers > 0:
             x_out = self.conv(x_out)
@@ -210,15 +201,13 @@ class CON(nn.Module):
     def forward(self, x_in, proba=False):
         """ Overwritten forward function for CON objects
 
-        - **Parameters**::
-            :param x_in: Input to the model
-                :type x_in: Tensor (batch_size x |A| x |S|)
-            :param proba: Indicates whether the network should produce probabilistic output
-                :type proba: Boolean
+        Args:
+            x_in (Tensor): Input to the model given as a Tensor of size (batch_size x self.in_channels x seq_len)
+            proba (:obj:`bool`): Indicates whether the network should produce probabilistic output
 
-        - **Returns**::
-
-            :return: Evaluation of the input
+        Returns:
+            Result of a forward pass through the model using the specified input. If 'proba' is set to True, the output
+            will be the probabilities assigned to each class by the model.
         """
         x_out = self.representation(x_in)
         if isinstance(self.classifier, LinearMax):
@@ -241,14 +230,15 @@ class CON(nn.Module):
     def unsup_train_classifier(self, data_loader, criterion=None, use_cuda=False):
         """ This function initializes the classification layer in an unsupervised fashion
 
-        - **Parameters**::
+        To call this function is only needed if the classification layer is a LinearMax layer. Otherwise, there is no
+        need for initializing the fully connected layer by an unsupervised training procedure. Standard initialization
+        protocols for fully connected layers can be used instead.
 
-            :param data_loader: PyTorch DataLoader that handles data
-                :type data_loader: torch.utils.data.DataLoader
-            :param criterion: Specifies the loss function. If set to None, torch.nn.BCEWithLogitsLoss() will be used.
-                :type criterion: PyTorch Loss function (e.g. torch.nn.L1Loss)
-            :param use_cuda: Specified whether all computations will be performed on the GPU
-                :type use_cuda: Boolean
+        Args:
+            data_loader (torch.utils.data.DataLoader): PyTorch DataLoader that handles data
+            criterion (Pytorch Loss Object): Specifies the loss function. If set to None, torch.nn.BCEWithLogitsLoss()
+                will be used.
+            use_cuda (:obj:`bool`): Specified whether all computations will be performed on the GPU
         """
         # perform an initial prediction using the network
         encoded_train, encoded_target = self.predict(data_loader, True, use_cuda=use_cuda)
@@ -266,21 +256,15 @@ class CON(nn.Module):
     def predict(self, data_loader, only_representation=False, proba=False, use_cuda=False):
         """ CON prediction function
 
-        - **Parameters**::
+        Args:
+            data_loader (torch.utils.data.DataLoader): PyTorch DataLoader that handles data
+            only_representation (:obj:`bool`): If set to True, the function will return the input to the classification
+                layer. Otherwise the result of a forward pass is returned. Defaults to False.
+            proba (:obj:`bool`): Indicates whether the network should produce probabilistic output.
+            use_cuda (:obj:`bool`): Specified whether all computations will be performed on the GPU
 
-            :param data_loader: PyTorch DataLoader that handles data
-                :type data_loader: torch.utils.data.DataLoader
-            :param only_representation:
-                :type only_representation: Boolean
-            :param proba: Indicates whether the network should produce probabilistic output
-                :type proba: Boolean
-            :param use_cuda: Specified whether all computations will be performed on the GPU
-                :type use_cuda: Boolean
-
-        - **Returns**::
-
-            :return output:
-            :return target_output:
+        Returns:
+            The computed output for each sample in the DataLoader together with the real target output of each sample.
         """
         # set training mode of the model to False
         self.train(False)
@@ -325,24 +309,24 @@ class CON(nn.Module):
         output.squeeze_(-1)
         return output, target_output
 
-    def initialize(self, data_loader, distance, n_sampling_olis=100000, init=None, max_iters=100, use_cuda=False):
+    def initialize(self, data_loader, distance, n_sampling_motifs=100000, init=None, max_iters=100, use_cuda=False):
         """ Function to initialize parameters of the network
+        
+        This function initializes the convolutional layers of a CMKN model. The CMKNLayer is initialized by, first, 
+        sampling a specified number of motifs or motif-position pairs (depending on selected distance) from the 
+        training data and, second, performing k-Means (or k-Means++) clustering on the sampled data to initialize
+        anchor points with the cluster centers. Traditional convolutional layers are initialized using the He 
+        initialization.
 
-        - **Parameters**::
-
-            :param data_loader: PyTorch DataLoader object that handles access to training data
-                :type data_loader: torch.utils.data.DataLoader
-            :param distance: Distance measure used in the k-Means algorithm
-                :type distance: String
-            :param n_sampling_olis: Number of oligomers that will be sampled to initialize oligomer anchor points
-                                       using the spherical k-Means algorithm
-                :type n_sampling_olis: Integer
-            :param init: Initialization parameter for the spherical k-Means algorithm
-                :type init: String
-            :param max_iters: Maximal number of iterations used in the K-Means clustering
-                :type max_iters: Integer
-            :param use_cuda: Parameter to determine whether to do calculations on the GPU or CPU.
-                :type use_cuda: Boolean
+        Args:
+            data_loader (torch.utils.data.DataLoader): PyTorch DataLoader object that handles access to training data
+            distance (:obj:`str`): Distance measure used in the k-Means algorithm.
+            n_sampling_motifs (:obj:`int`): Number of motifs or motif-position pairs that will be sampled to initialize 
+                anchor points using the k-Means algorithm. Defaults to 100000.
+            init (:obj:`str`): Initialization parameter for the k-Means algorithm. Defaults to None.
+            max_iters (:obj:`int`): Maximal number of iterations used in the K-Means clustering. Defaults to 100.
+            use_cuda (:obj:`bool`): Parameter to determine whether to do calculations on the GPU or CPU. Defaults to 
+                False.
         """
 
         # turn train mode of
@@ -360,7 +344,7 @@ class CON(nn.Module):
         #   -> if this number cannot be calculated, sample 1000 oligomers from each batch until n_sampling_olis are
         #      sampled
         try:
-            n_oligomers_per_batch = (n_sampling_olis + len(data_loader) - 1) // len(data_loader)
+            n_oligomers_per_batch = (n_sampling_motifs + len(data_loader) - 1) // len(data_loader)
         except:
             n_oligomers_per_batch = 1000
 
@@ -368,13 +352,13 @@ class CON(nn.Module):
         # information
         if distance == 'euclidean':
             # initialize tensor that stores the sampled oligomers and make sure it is on the same device as the model
-            oligomers = self.oligo.weight.new_zeros(n_sampling_olis, self.oligo.patch_dim + 1)
+            oligomers = self.cmkn_layer.weight.new_zeros(n_sampling_motifs, self.cmkn_layer.patch_dim + 1)
 
             # make sure that oligomers contain positional information
             include_pos = True
         else:
             # initialize tensor that stores the sampled oligomers and make sure it is on the same device as the model
-            oligomers = self.oligo.weight.new_zeros(n_sampling_olis, self.oligo.patch_dim)
+            oligomers = self.cmkn_layer.weight.new_zeros(n_sampling_motifs, self.cmkn_layer.patch_dim)
 
             # make sure that oligomers will not contain positional information
             include_pos = False
@@ -383,7 +367,7 @@ class CON(nn.Module):
         seq_len = None
         for data, _ in data_loader:
             # stop sampling oligomers if the maximum number of oligomers is already achieved
-            if n_oligomers >= n_sampling_olis:
+            if n_oligomers >= n_sampling_motifs:
                 break
 
             # get the length of the sequences; this will be needed later
@@ -396,13 +380,13 @@ class CON(nn.Module):
 
             # sample the specified number of oligomers using the current batch of data
             with torch.no_grad():
-                data_oliogmers = self.oligo.sample_oligomers(data, n_oligomers_per_batch, include_pos)
+                data_oliogmers = self.cmkn_layer.sample_oligomers(data, n_oligomers_per_batch, include_pos)
 
             # only use a subset of the sampled oligomers in this batch, if this batch would exceed the maximum number
             # of sampled oligomers
             size = data_oliogmers.size(0)
-            if n_oligomers + size > n_sampling_olis:
-                size = n_sampling_olis - n_oligomers
+            if n_oligomers + size > n_sampling_motifs:
+                size = n_sampling_motifs - n_oligomers
                 data_oliogmers = data_oliogmers[:size]
 
             # update the oligomer tensor with the currently sampled oligomers and the amount of already sampled
@@ -411,8 +395,8 @@ class CON(nn.Module):
             n_oligomers += size
 
         # initialize the oligomer and position anchor points of the Oligo Kernel layer
-        print('        total number of sampled oligomers: {}'.format(n_oligomers))
-        self.oligo.initialize_weights(distance, oligomers, seq_len, init=init, max_iters=max_iters)
+        print('        total number of sampled motifs: {}'.format(n_oligomers))
+        self.cmkn_layer.initialize_weights(distance, oligomers, seq_len, init=init, max_iters=max_iters)
 
         # iterate over all convolutional layers
         if self.nb_conv_layers > 0:
@@ -427,42 +411,35 @@ class CON(nn.Module):
                     nn.init.kaiming_uniform_(layer.weight, mode='fan_in', nonlinearity='relu')
 
     def sup_train(self, train_loader, criterion, optimizer, lr_scheduler=None, init_train_loader=None,
-                  distance='euclidean', n_sampling_olis=100000, kmeans_init=None, epochs=100, val_loader=None,
+                  distance='euclidean', n_sampling_motifs=100000, kmeans_init=None, epochs=100, val_loader=None,
                   use_cuda=False, early_stop=True):
         """ Perform supervised training of the CON model
 
-        - **Parameters**::
+        This function will first initialize all convolutional layers of the model. Afterwards, a normal training routine
+        for ANNs follows. If validation data is given, the performance on the validation data is calculate after each
+        epoch.
 
-            :param train_loader: PyTorch DataLoader that handles data
-                :type train_loader: torch.utils.data.DataLoader
-            :param criterion: Specifies the loss function.
-                :type criterion: PyTorch Loss function (e.g. torch.nn.L1Loss)
-            :param optimizer: Optimization algorithm used during training
-                :type optimizer: PyTorch Optimizer (e.g. torch.optim.Adam)
-            :param lr_scheduler: Algorithm used for learning rate adjustment
-                :type lr_scheduler: PyTorch LR Scheduler (e.g. torch.optim.lr_scheduler.LambdaLR) (Default: None)
-            :param init_train_loader: PyTorch DataLoader object that handles access to training data used during
-                                      initialization of the Oligo Kernel layer.
-                :type init_train_loader: torch.utils.data.DataLoader
-            :param distance: Distance measure used in the k-Means algorithm
-                :type distance: String
-            :param n_sampling_olis: Number of oligomers that will be sampled to initialize oligomer anchor points
-                                       using the spherical k-Means algorithm
-                :type n_sampling_olis: Integer
-            :param kmeans_init: Initialization parameter for the spherical k-Means algorithm
-                :type kmeans_init: String
-            :param epochs: Number of epochs during training
-                :type epochs: Integer (Default: 100)
-            :param val_loader: PyTorch DataLoader that handles data during the validation phase
-                :type val_loader: torch.utils.data.DataLoader (Default: None)
-            :param use_cuda: Specified whether all computations will be performed on the GPU
-                :type use_cuda: Boolean (Default: False)
-            :param early_stop: Specifies if early stopping will be used during training
-                :type early_stop: Boolean (Default: True)
+        Args:
+            train_loader (torch.utils.data.DataLoader): PyTorch DataLoader that handles training data.
+            criterion (PyTorch Loss Object): Specifies the loss function.
+            optimizer (PyTorch Optimizer): Optimization algorithm used during training.
+            lr_scheduler (PyTorch LR Scheduler): Algorithm used for learning rate adjustment. Defaults to None.
+            init_train_loader (torch.utils.data.DataLoader): This DataLoader can be set if different datasets should be
+                used for initializing the convolutional motif kernel layer of this model and training the model. Data
+                accessed by this DataLoader will be used for initialization of CMK layers. Defaults to None.
+            distance (:obj:`str`): Distance measure used in the k-Means algorithm during initialization of convolutional
+                motif kernel layers. Defaults to 'euclidean'.
+            n_sampling_motifs (:obj:`int`): Number of motifs that will be sampled to initialize oligomer anchor points
+                using the k-Means algorithm. Defaults to 100000.
+            kmeans_init (:obj:`str`): Initialization parameter for the spherical k-Means algorithm.
+            epochs (:obj:`int`): Number of epochs during training. Defaults to 100.
+            val_loader (torch.utils.data.DataLoader): PyTorch DataLoader that handles data during the validation phase.
+                Defaults to None.
+            use_cuda (:obj:`bool`): Specified whether all computations will be performed on the GPU. Defaults to False.
+            early_stop (:obj:`bool`): Specifies if early stopping will be used during training. Defaults to True.
 
-        - **Returns**::
-
-            :return training and validation accuracies and losses of each epoch
+        Returns:
+            Training and validation accuracies and losses of each epoch.
         """
         print("Initializing CON layers")
         tic = timer()
@@ -470,10 +447,10 @@ class CON(nn.Module):
         # initialize the anchor points of all layers that use anchor points in an unsupervised fashion and initialize
         # weights of all convolutional layers
         if init_train_loader is not None:
-            self.initialize(init_train_loader, distance=distance, n_sampling_olis=n_sampling_olis,
+            self.initialize(init_train_loader, distance=distance, n_sampling_motifs=n_sampling_motifs,
                             init=kmeans_init, use_cuda=use_cuda)
         else:
-            self.initialize(train_loader, distance=distance, n_sampling_olis=n_sampling_olis,
+            self.initialize(train_loader, distance=distance, n_sampling_motifs=n_sampling_motifs,
                             init=kmeans_init, use_cuda=use_cuda)
 
         toc = timer()

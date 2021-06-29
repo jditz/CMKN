@@ -1,10 +1,18 @@
-################################################################
-# Utility functions for handling data in experiments involving #
-# the use of CON models                                        #
-#                                                              #
-# Author: Jonas Ditz                                           #
-# Contact: ditz@informatik.uni-tuebingen.de                    #
-################################################################
+"""Module that contains classes and functions to handle input data for CMKN experiments.
+
+Classes:
+    CMKNDataset: A extension of PyTorch's DataSet class tailored for CMKN experiments.
+    EncodeLoader: A handler tailored for the ENCODE datasets.
+
+Functions:
+    double_shuffle: Implementation of dinucleotide shuffling.
+
+Attributes:
+    ALPHABETS: A dictionary containing different biological alphabets.
+
+Authors:
+    Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
+"""
 
 import os
 import sys
@@ -115,6 +123,17 @@ def sample_new_graph(graph, last_vertex):
 
 
 def doublet_shuffle(seq):
+    """Dinucleotide shuffling implementation
+
+    This function creates a new sequence based on the input sequence using a dinucleatide shuffling to make sure that
+    each dinucleotide has the same frequence in the old and new sequence.
+
+    Args:
+        seq (:obj:`str`): Input sequence on which the dinucleotide frequencies of the new sequence will be based.
+
+    Returns:
+        A new sequence with the same dinucleotide frequencies as the input sequence.
+    """
     seq = seq.upper().translate(_RNA)
     last_vertex = seq[-1]
     graph = seq_to_graph(seq)
@@ -166,35 +185,44 @@ def pad_sequences(sequences, pre_padding=0, maxlen=None, padding='pre', alphabet
 ######################################
 
 
-class CONDataset(data.Dataset):
-    """ Custom PyTorch Dataset object to handle input for experiments with CON models.
+class CMKNDataset(data.Dataset):
+    """ Custom PyTorch Dataset object to handle input for experiments with CMKN models.
 
-    This class extension is only tested with fasta files. Extensions for further file formats might be implemented in
-    the future.
+    The CONDataset object can handle dataset given as fasta files, directly. To succesfully read ENCODE datasets, the
+    EncodeLoader object will be used. Sequences can be accessed as one-hot encoding matrices or as a two-row matrix,
+    where each column holds the k-mer starting at that position mapped onto the upper half of the unit circle.
+
+    Attributes:
+        data (:obj:`list` of :obj:`str`): List containing all sequences of the dataset
+        labels (:obj:`list` of :obj:`str`): List containing the label of each sequence in the dataset
     """
+
     def __init__(self, filepath, ext="fasta", kmer_size=3, alphabet="DNA_FULL", clean_set=None, tfid=None,
-                 encode='continuous'):
+                 seq_encode='onehot'):
         """ Custom Dataset Constructor
 
-        - **Parameters**::
+        Args:
+            filepath (:obj:`str`): Path to the file containing the data.
+            ext (:obj:`str`): Extension of the file containing the data. Defaults to 'fasta'.
+            kmer_size (:obj:`int`): Size of the kmers considered in the current experiment. Defaults to 3.
+            alphabet (:obj:`str`): Alphabet that was used to create the sequences in the dataset. Defaults to
+                'DNA_FULL'.
+            clean_set (:obj:`tuple`): Specify if the dataset should be cleaned. Only works for fasta-ish files.
+                The first entry of the tuple is an Integer (specifies which column of the label holds the information
+                needed for cleaning), and the second entry is a string (specifies the value that indicates an invalid
+                entry). Defaults to None
+            tfid (:obj:`str`): ID of the used transcription factor. Only used for ENCODE datasets. Defaults to None.
+            seq_encode (:obj:`str`): Specifies how the sequences will be made accessible to PyTorch's DataLoader object.
+                Currently, only 'onehot' and 'continuous' are supported. Defaults to 'onehot'.
 
-            :param filepath: Path to the file containing the data
-                :type filepath: String
-            :param ext: Extension of the file containing the data
-                :type ext: String
-            :param kmer_size: Size of the kmers considered in the current experiment
-            :param clean_set: Specify if the dataset should be cleaned. Only works for fasta-ish files.
-                :type clean_set: Tuple where the first entry is an Integer (specifies which column of the label holds
-                                 the information needed for cleaning), and the second entry is a string (specifies the
-                                 value that indicates an invalid entry)
-            :param tfid: ID of the used transcription factor.
-                :type tfid: String
-            :param encode: Specifies how to encode the oligomer information of samples
-                :type encode: String
+        Raises:
+            ValueError: If the dataset contains sequences of different length
+            ValueError: If `data` and `labels` have different length
+            ValueError: If `seq_encode` is set to an unknown encoding type.
         """
 
         # call constructor of parent class
-        super(CONDataset, self).__init__()
+        super(CMKNDataset, self).__init__()
 
         # store parameters
         self.filepath = filepath
@@ -253,30 +281,30 @@ class CONDataset(data.Dataset):
             raise ValueError('Unknown file extension: {}'.format(ext))
 
         # create easy-to-use handle for the sequence encoding
-        if encode == 'continuous':
+        if seq_encode == 'continuous':
+            # create dictionary that maps each string of length kmer_size that can be build using alphabet to an integer
+            self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[self.alphabet][0])
             self.encode_function = lambda x: self._encode_continuous(x)
-        elif encode == 'onehot':
+        elif seq_encode == 'onehot':
             self.encode_function = lambda x: self._encode_onehot(x)
         else:
-            raise ValueError('Unknown encoding option: {}'.format(encode))
-
-        # create dictionary that maps each string of length kmer_size that can be build using alphabet to an integer
-        #self.kmer_dict = kmer2dict(kmer_size, ALPHABETS[self.alphabet][0])
+            raise ValueError('Unknown encoding option: {}'.format(seq_encode))
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        """ Implementation of the getitem routine. A sample if provided as a tuple holding a data tensor and a
-        label list that contains the ids of all entries in the data tensor.
+        """ Implementation of the getitem routine.
 
-        - **Parameters**::
+        A sample if provided as a tuple holding a data tensor and a label list that contains the ids of all entries in
+        the data tensor.
 
-            :param idx: Index or set of indices of the sample(s) that will be retrieved
+        Args:
+            idx: Index or set of indices of the sample(s) that will be retrieved
 
-        - **Returns**::
-
-            :return: Sample(s) from the input data
+        Returns:
+            Sample(s) from the input data where the sequences are encoded as specified in the initialization of this
+            object.
         """
         # if the set of indices is given as a tensor, convert to list
         if torch.is_tensor(idx):
@@ -285,16 +313,16 @@ class CONDataset(data.Dataset):
         return self.encode_function(idx)
 
     def _encode_onehot(self, idx):
-        """This function encodes sequences as one-hot encoding matrices, where each column is a one-hot encoding vector
-        of the letter starting at that position.
+        """This function encodes sequences as one-hot encoding matrices.
 
-        - **Parameters**::
+        Each column of such a matrix is a one-hot encoding vector of the letter starting at that position in the
+        corresponding sequence.
 
-            :param idx: Index or set of indices of the sample(s) that will be retrieved
+        Args:
+            param idx: Index or set of indices of the sample(s) that will be retrieved
 
-        - **Returns**::
-
-            :return: Sample(s) from the input data
+        Returns:
+            Sample(s) from the input data where the sequences are one-hot encoded.
         """
         # perform different sample extraction depending on whether a list of indices is given or not
         try:
@@ -321,16 +349,16 @@ class CONDataset(data.Dataset):
         return sample
 
     def _encode_continuous(self, idx):
-        """This function encodes oligomer starting information of each extracted sample as a continuous number mapped
-        onto a 2-dimensional vector.
+        """ Return sequences as continuously encoded matrices.
 
-        - **Parameters**::
+        This function encodes oligomer starting information of each extracted sample as a continuous number mapped
+        onto the upper half of the unti circle.
 
-            :param idx: Index or set of indices of the sample(s) that will be retrieved
+        Args:
+            idx: Index or set of indices of the sample(s) that will be retrieved
 
-        - **Returns**::
-
-            :return: Sample(s) from the input data
+        Returns:
+            Sample(s) from the input data where the sequences are continuously encoded
         """
         # perform different sample extraction depending on whether a list of indices is given or not
         try:
@@ -364,11 +392,24 @@ class CONDataset(data.Dataset):
         return sample
 
     def update_dataset(self, tfid=None, split='train'):
-        """This function updates the DataSet object to use the sequences for the specified tf id
+        """Updates `data` and `labels` attributes
+
+        This function updates the attributes `data` and `labels` to reflect the dataset of a specified transcription
+        factor within the encode dataset. Only usable if the Dataset object was initialized to handle ENCODE data.
+
+        Args:
+            tfid (:obj:`str`): The transcription factor that will be loaded. If multiple transcription factors should
+                be used, provide the IDs as a list. Defaults to None.
+            split (:obj:`str`): Specifies if training or test data should be loaded. Defaults to 'train'.
+
+        Raises:
+            TypeError: If the object was not initialized to handle ENCODE data.
+            ValueError: If tfid is neither :obj:`str` or :obj:`list` of :obj:`str`.
+            ValueError: If `data` and `labels` have different sizes after updateing both.
         """
         # check if the DataSet object is set up for ENCODE datasets
         if self.ext != 'seq.gz':
-            raise ValueError('DataSet object is not set up for ENCODE datasets')
+            raise TypeError('DataSet object is not set up for ENCODE datasets')
 
         # if no transcription factor is selected, use the first one in the datasets
         if tfid is None:
@@ -396,7 +437,9 @@ class CONDataset(data.Dataset):
 
 
 class EncodeLoader(object):
-    """ Custom loader handling the ENCODE dataset published in 'B. Alipanahi, A. Delong, M. T. Weirauch, and B. J. Frey.
+    """ Custom loader handling the ENCODE datasets.
+
+    ENCODE dataset were published in 'B. Alipanahi, A. Delong, M. T. Weirauch, and B. J. Frey.
     Predicting the sequence specificities of DNA- and RNA-binding proteins by deep learning. Nature Biotechnology,
     doi:10.1038/nbt.3300'
     """
