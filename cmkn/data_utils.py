@@ -190,7 +190,10 @@ class CMKNDataset(data.Dataset):
 
     The CONDataset object can handle dataset given as fasta files, directly. To succesfully read ENCODE datasets, the
     EncodeLoader object will be used. Sequences can be accessed as one-hot encoding matrices or as a two-row matrix,
-    where each column holds the k-mer starting at that position mapped onto the upper half of the unit circle.
+    where each column holds the k-mer starting at that position mapped onto the upper half of the unit circle. To
+    guarantee flexibility, CMKNDataset does not process id strings of fasta files. Therefore, one has to implement a
+    child class that inherits from CMKNDataset and process the id strings within this child's __getitem__ function in
+    order to create a fully functional Dataset object.
 
     Attributes:
         data (:obj:`list` of :obj:`str`): List containing all sequences of the dataset
