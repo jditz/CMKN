@@ -37,7 +37,7 @@ def seq2pwm(seq, alphabet='DNA_FULL'):
 
     Raises:
         ValueError: If sequences are of different length
-        ValueError: If the input was neither a :obj:`str`, :obj:`list`of :obj:`str`, or a ndarray
+        ValueError: If the input was neither a :obj:`str`, a :obj:`list`of :obj:`str`, nor a ndarray
     """
 
     # get the alphabet
@@ -83,7 +83,8 @@ def seq2pwm(seq, alphabet='DNA_FULL'):
     return pwm
 
 
-def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, num_best=-1, viz=True):
+def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, num_best=-1, viz=True, norm=True,
+                         threshold=0.1):
     """Visual interpretation of the learned model
 
     This function converts the learned anchors into a 2d matrix where each row represents one motif and each column
@@ -97,11 +98,14 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
         anchors_oli (ndarray): Learned anchor motifs
         anchors_pos (ndarray): Learned anchor positions
         alphabet (:obj:`str`): Alphabet of the sequences used for training the model
-        :param sigma (:obj:`float`): sigma value used for the trained model
-        :param alpha (:obj:`float`): Scaling parameter for the oligomer/motif comparison kernel
-        :param num_best (:obj:`int`): Indicates how many of the most informative anchors should be showed. All anchors
+        sigma (:obj:`float`): sigma value used for the trained model
+        alpha (:obj:`float`): Scaling parameter for the oligomer/motif comparison kernel
+        num_best (:obj:`int`): Indicates how many of the most informative anchors should be showed. All anchors
             are included, if set to -1.
-        :param viz (:obj:`bool`): Indicates whether the matrix should be visualized using matplotlib
+        viz (:obj:`bool`): Indicates whether the matrix should be visualized using matplotlib
+        norm (:obj:`bool`): Indicates whether the matrix should be normalized between zero and one. Defaults to True.
+        threshold (:obj:`float`): All values of the matrix that are smaller than this value will be set to zero in
+            order to denoise the image. If no denoising should be performed, set threshold to zero. Defaults to 0.1.
 
     Returns:
         NumPy ndarray which will be the discretized motif function for each anchor point over the whole input sequence.
@@ -150,11 +154,12 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
                                         (1/(np.pi * sigma**2)) * ((j - positions[i])**2))
 
     # scale matrix between 0 and 1
-    #image_matrix /= image_matrix.max()
+    if norm:
+        image_matrix /= image_matrix.max()
 
     # reduce noise in the matrix
-    #below_threshold = image_matrix < 0.1
-    #image_matrix[below_threshold] = 0
+    below_threshold = image_matrix < threshold
+    image_matrix[below_threshold] = 0
 
     if num_best == -1:
         num_best = anchors_oli.shape[0]
