@@ -521,7 +521,7 @@ class CMKN(nn.Module):
                 running_corrects = 0
 
                 # iterate over the data that will be used in the current phase
-                for oli, target, *_ in data_loader[phase]:
+                for oli1, target, *_ in data_loader[phase]:
                     size = oli.size(0)
                     target = target.float()
 
@@ -537,7 +537,7 @@ class CMKN(nn.Module):
                     #   -> do not keep track of the gradients if we are in the validation phase
                     if phase == 'val':
                         with torch.no_grad():
-                            output = self(oli)
+                            output = self(oli1)
 
                             # create prediction tensor
                             pred = target.new_zeros(output.shape)

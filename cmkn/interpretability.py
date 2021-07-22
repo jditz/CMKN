@@ -203,9 +203,11 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
         anchor_points (Tensor): Tensor containing the oligomers corresponding to each anchor points, learned by an motif
             kernel layer (i.e. the tensor that can be accessed by model.oligo.weight)
         type (:obj:`str`): Specifies whether the result will be a DNA or a Protein motif. Defaults to 'DNA'
-        outdir (:obj:`str`): Destination where the motifs will be stored. Defaults to an empty string.
-        eps (:obj:`float`): Values below this threshold will be set to 0. This threshold can be used to eliminate parts
-            of the motif that do not hold any information.
+        outdir (:obj:`str`): Destination where the motifs will be stored. If an empty string is given, motifs will not
+            be stored but displayed instead. Defaults to an empty string.
+        eps (:obj:`float` or :obj:`int`): If a floating point number is given, values below this threshold will be set
+            to 0. If an integer is given, only the top k values will be used in the motif (k is the integer provided).
+            This argument can be used to denoise motifs or display only the most informative parts.
 
     Raises:
         ValueError: If an unknown alphabet was chosen.
@@ -303,10 +305,21 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
         # store current anchor as a numpy array
         cur_anchor = anchor_points[anchor, :, :].cpu().numpy()
 
-        # remove all values that are below the threshold
-        cur_anchor[cur_anchor < eps] = 0
+        # make sure that each column of the anchor has unit l1 norm
+        aux_norm = np.linalg.norm(cur_anchor, ord=1, axis=0)
+        aux_norm[aux_norm == 0] = 1e-6
+        cur_anchor = cur_anchor / aux_norm
 
-        # make sure each column has still unit l1 norm, i.e. the anchor is still a valid PWM
+        # utelize the eps argument
+        if isinstance(eps, int):
+            # set each value to zero except the k biggest values
+            cur_anchor = cur_anchor * (cur_anchor >= np.sort(cur_anchor, axis=0)[[-eps], :]).astype(int)
+        else:
+            # remove all values that are below the threshold
+            cur_anchor[cur_anchor < eps] = 0
+
+        # recalculate the norm of each column and make sure that each column of  the anchor is normalized to have unit
+        # l1 norm. Otherwise, it would not be a valid PWM.
         aux_norm = np.linalg.norm(cur_anchor, ord=1, axis=0)
         aux_norm[aux_norm == 0] = 1e-6
         cur_anchor = cur_anchor / aux_norm
@@ -346,5 +359,8 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
         plt.ylim((0, maxi))
         plt.tight_layout()
         plt.axis('off')
-        plt.savefig(outdir + str(anchor).zfill(3) + "-anchor.png", bbox_inches='tight')
-        plt.close(fig)
+        if outdir != "":
+            plt.savefig(outdir + str(anchor).zfill(3) + "-anchor.png", bbox_inches='tight')
+            plt.close(fig)
+        else:
+            plt.show()
