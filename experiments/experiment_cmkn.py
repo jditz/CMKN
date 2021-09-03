@@ -45,7 +45,7 @@ class CustomHandler(CMKNDataset):
             aux_tup = None
 
         super(CustomHandler, self).__init__(filepath, kmer_size=kmer_size, alphabet='PROTEIN_FULL',
-                                            clean_set=aux_tup, encode=encode)
+                                            clean_set=aux_tup, seq_encode=encode)
 
         self.nb_classes = nb_classes
         if nb_classes == 2:
@@ -154,7 +154,7 @@ def load_args():
                         help="specify the type of experiment, i.e. the used dataset. Currently only 'HIV' and " +
                              "'ENCODE' are supported choices")
     parser.add_argument('--batch-size', dest="batch_size", type=int, default=64, metavar='M',
-                        help='input batch size for training (default: 4)')
+                        help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', dest="nb_epochs", type=int, default=200, metavar='N',
                         help='number of epochs to train (default: 5)')
     parser.add_argument("--out-channels", dest="out_channels", metavar="m", default=[99], nargs='+',

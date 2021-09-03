@@ -14,7 +14,12 @@ from Bio import SeqIO
 import pickle
 from timeit import default_timer as timer
 
-from con import compute_metrics
+from cmkn import compute_metrics
+
+
+# meta variables
+PROTEIN = 'ARNDCQEGHILKMFPSTWYVXBZJUO~'
+DNA = 'ACGTN'
 
 
 # function to parse line arguments
@@ -26,10 +31,6 @@ def load_args():
     parser.add_argument("--eval", action='store_true', default=False, help="Use this flag to enter evaluation mode")
     parser.add_argument('--type', dest='type', default='HIV', type=str, choices=['HIV'],
                         help="specify the type of experiment.")
-    parser.add_argument("--sigma", dest="sigma", default=1, type=float,
-                        help="Value of oligo kernel's sigma parameter.")
-    parser.add_argument("--kmer", dest="kmer_size", default=1, type=int,
-                        help="Length of the k-mers used for the oligo kernel.")
     parser.add_argument("--hiv-type", dest="hiv_type", default='PI', type=str, choices=['PI', 'NRTI', 'NNRTI'],
                         help="Type of the drug used in the experiment (either PI, NRTI, or NNRTI). Used ONLY if " +
                              "--type is set to HIV.")
@@ -37,6 +38,12 @@ def load_args():
                         help="Name of the drug used in the experiment. Used ONLY if --type is set to HIV.")
     parser.add_argument("--hiv-number", dest="hiv_number", default=6, type=int,
                         help="Number of the drug used in the experiment. Used ONLY if --type is set to HIV.")
+    parser.add_argument("--reg_params", dest="reg_params", default=[10e-6, 10e-5, 10e-4, 10e-3, 10e-2, 10e-1, 10],
+                        type=list, help="List of values used for the SVM's regularizaion parameter (often denoted as C)"
+                                        " during model optimization")
+    parser.add_argument("--deg_params", dest="deg_params", default=[1, 2, 3, 4, 5], type=list,
+                        help="List of values for the SVM's degree parameter (determining the degree of the used "
+                             "polynomial kernel) during model optimization")
 
     # parse the arguments
     args = parser.parse_args()
@@ -48,8 +55,7 @@ def load_args():
     args.save_logs = False
     if args.outdir != "":
         args.save_logs = True
-        args.outdir = args.outdir + "/svm_oligoKernel/{}/{}_{}/{}_{}".format(args.type, args.hiv_type, args.hiv_name,
-                                                                             args.kmer_size, args.sigma)
+        args.outdir = args.outdir + "/SVM_experiment/{}/{}_{}/".format(args.type, args.hiv_type, args.hiv_name)
         if not os.path.exists(args.outdir):
             try:
                 os.makedirs(args.outdir)
@@ -59,34 +65,18 @@ def load_args():
     return args
 
 
-# define the oligo kernel function
-def oligo_kernel(x, y, k, sigma):
-    tic = timer()
-
-    # initialize the gram matrix
-    gram_matrix = np.zeros((x.shape[0], y.shape[0]))
-
-    # iterate over each pair of inputs and fill the gram matrix
-    for i, xi in enumerate(x):
-        for j, yj in enumerate(y):
-
-            res = 0
-
-            # iterate over the sequence positions
-            for l in range(len(xi) - (k-1)):
-                for m in range(len(yj) - (k-1)):
-
-                    # skip if oligomers starting at position i and j are different
-                    if xi[l:l+k] != yj[m:m+k]:
-                        continue
-
-                    res += np.exp(- 1/4*sigma**2 * (l - m)**2)
-
-            gram_matrix[i, j] = res * np.sqrt(np.pi) * sigma
-
-    toc = timer()
-    print("Finished gram matrix computation, elapsed time: {:.2f}min".format((toc - tic) / 60))
-    return gram_matrix
+# one-hot encoding of strings
+def encoding(in_str, alphabet, type='ordinal'):
+    if type == 'ordinal':
+        try:
+            vector = [alphabet.index(letter) for letter in in_str]
+        except ValueError:
+            raise ValueError('unknown letter in input: {}'.format(in_str))
+    elif type == 'one-hot':
+        vector = [[0 if char != letter else 1 for char in alphabet] for letter in in_str]
+    else:
+        raise ValueError('Unknown encoding type: {}'.format(type))
+    return np.array(vector)
 
 
 # loading routine for HIV resistance data
@@ -101,7 +91,7 @@ def load_data_hiv(type, drug_number):
     tmp = list(SeqIO.parse(filepath, 'fasta'))
 
     # get the sequences and labels
-    seq = [str(i.seq) for i in tmp if i.id.split('|')[drug_number] != 'NA']
+    seq = [encoding(str(i.seq), PROTEIN) for i in tmp if i.id.split('|')[drug_number] != 'NA']
     label = [class_to_label[i.id.split('|')[drug_number]] for i in tmp if i.id.split('|')[drug_number] != 'NA']
 
     return np.array(seq), np.array(label)
@@ -129,38 +119,43 @@ def experiment(args):
     else:
         ValueError('Unknown type of experiment: {}'.format(args.type))
 
-    # create handle for the oligo kernel function
-    oligo = lambda x, y: oligo_kernel(x, y, args.kmer_size, args.sigma)
+    # iterate over the specified model parameters to perform a grid search
+    for reg in args.reg_params:
+        for degree in args.deg_params:
+            print("Training SVM with polynomial degree = {} and C = {}...".format(degree, reg))
 
-    # perform 5-fold stratified cross-validation
-    results = []
-    for fold_nb, fold in enumerate(folds):
-        # initialize the SVM classifier using the oligo kernel
-        clf = svm.SVC(kernel=oligo, probability=True)
+            # perform 5-fold stratified cross-validation
+            results = []
+            for fold_nb, fold in enumerate(folds):
+                # initialize the SVM classifier using the oligo kernel
+                clf = svm.SVC(C=reg, kernel="poly", degree=degree, probability=True)
 
-        tic = timer()
-        # fit classifier using the loaded data
-        clf.fit(X[fold[0]], Y[fold[0]])
-        toc = timer()
-        print("Finished SVM fit ({} samples), elapsed time: {:.2f}min".format(len(X[fold[0]]), (toc - tic) / 60))
+                tic = timer()
+                # fit classifier using the loaded data
+                clf.fit(X[fold[0]], Y[fold[0]])
+                toc = timer()
+                print("    Finished SVM fit ({} samples), elapsed time: {:.2f}min".format(len(X[fold[0]]),
+                                                                                          (toc - tic) / 60))
 
-        # perform prediction on validation data
-        tic = timer()
-        pred_y = clf.predict_proba(X[fold[1]])
-        toc = timer()
-        print("Finished prediction ({} sample), elapsed time: {:.2f}min".format(len(X[fold[1]]),  (toc - tic) / 60))
+                # perform prediction on validation data
+                tic = timer()
+                pred_y = clf.predict_proba(X[fold[1]])
+                toc = timer()
+                print("    Finished prediction ({} samples), elapsed time: {:.2f}min\n".format(len(X[fold[1]]),
+                                                                                               (toc - tic) / 60))
 
-        # convert real targets into 2-dimensional array
-        real_y = np.zeros((len(Y[fold[1]]), 2))
-        for i, label in enumerate(Y[fold[1]]):
-            real_y[i, label] = 1
+                # convert real targets into 2-dimensional array
+                real_y = np.zeros((len(Y[fold[1]]), 2))
+                for i, label in enumerate(Y[fold[1]]):
+                    real_y[i, label] = 1
 
-        res = compute_metrics(real_y, pred_y)
-        results.append(res.to_dict())
+                res = compute_metrics(real_y, pred_y)
+                results.append(res.to_dict())
 
-    # store the evaluation results of the current experiment
-    with open(args.outdir + '/validation_results.pkl', 'wb') as out_file:
-        pickle.dump(results, out_file, pickle.HIGHEST_PROTOCOL)
+            # store the evaluation results of the current experiment
+            filename = '/validation_results_{}_{}.pkl'.format(degree, reg)
+            with open(args.outdir + filename, 'wb') as out_file:
+                pickle.dump(results, out_file, pickle.HIGHEST_PROTOCOL)
 
 
 def evaluation(args):

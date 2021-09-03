@@ -95,8 +95,10 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
 
     Args:
         seq (:obj:`str`): Input sequence for which the trained model should be visualized
-        anchors_oli (ndarray): Learned anchor motifs
-        anchors_pos (ndarray): Learned anchor positions
+        anchors_oli (ndarray): Learned anchor motifs. Alternatively, this can be a numpy array representing a list of
+            motifs.
+        anchors_pos (ndarray): Learned anchor positions. Alternatively this can be a numpy array storing a sequence
+            position (given as a float) for each motif given with the input for anchors_oli.
         alphabet (:obj:`str`): Alphabet of the sequences used for training the model
         sigma (:obj:`float`): sigma value used for the trained model
         alpha (:obj:`float`): Scaling parameter for the oligomer/motif comparison kernel
@@ -124,7 +126,13 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
         seq = np.concatenate((seq, np.zeros((seq.shape[0], kmer_size - 1))), axis=1)
 
     # convert anchor position vectors into sequence positions
-    positions = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (seq_len - 1)
+    if len(anchors_pos.shape) == 1:
+        positions = anchors_pos
+    elif len(anchors_pos.shape) == 2:
+        positions = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (seq_len - 1)
+    else:
+        raise ValueError("Unexpected dimensionality of anchors_pos. Expected 1 or 2 dimensions, "
+                         "got {} dimensions".format(len(anchors_pos.shape)))
 
     # initialize the vizualisation matrix
     image_matrix = np.zeros((anchors_oli.shape[0], seq_len))
@@ -148,6 +156,9 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
 
         # iterate over each sequence position
         for j in range(seq_len):
+
+            #seq_motif = seq[:, j:j+kmer_size]
+            #posi = np.array(range(0, seq_len))
 
             # calculate the oligo function for the current anchor point at the current sequence position
             image_matrix[i, j] = np.exp(alpha * (np.vdot(anchor_motif, seq_motif) - kmer_size) -

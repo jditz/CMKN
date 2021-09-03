@@ -5,30 +5,170 @@
 # Author: Jonas Ditz                        #
 #############################################
 
+import os
+import argparse
+
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils import data
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch.optim as optim
 from Bio import SeqIO
 import pickle
 
+from cmkn import compute_metrics, ClassBalanceLoss
+
 
 # MACROS
+PROTEIN = 'ARNDCQEGHILKMFPSTWYVXBZJUO~'
+DNA = 'ACGTN'
 EMBEDDING_DIR = {"A": 1, "a": 1, "B": 2, "b": 2, "C": 3, "c": 3, "D": 4, "d": 4, "E": 5, "e": 5, "F": 6, "f": 6, "G": 7,
                  "g": 7, "H": 8, "h": 8, "I": 9, "i": 9, "J": 10, "j": 10, "K": 11, "k": 11, "L": 12, "l": 12, "M": 13,
                  "m": 13, "N": 14, "n": 14, "O": 15, "o": 15, "P": 16, "p": 16, "Q": 17, "q": 17, "R": 18, "r": 18,
                  "S": 19, "s": 19, "T": 20, "t": 20, "U": 21, "u": 21, "V": 22, "v": 22, "W": 23, "w": 23, "X": 24,
-                 "x": 24, "Y": 25, "y": 25, "Z": 26, "z": 26}
+                 "x": 24, "Y": 25, "y": 25, "Z": 26, "z": 26, "~": 27}
+
+
+# function to parse line arguments
+def load_args():
+    parser = argparse.ArgumentParser(description="SVM with oligo kernel experiment")
+    parser.add_argument('--seed', type=int, default=1, metavar='S', help='random seed (default: 1)')
+    parser.add_argument("--outdir", metavar="outdir", dest="outdir", default='../output', type=str,
+                        help="output path")
+    parser.add_argument("--eval", action='store_true', default=False, help="Use this flag to enter evaluation mode")
+    parser.add_argument('--type', dest='type', default='HIV', type=str, choices=['HIV'],
+                        help="specify the type of experiment.")
+    parser.add_argument("--hiv-type", dest="hiv_type", default='NRTI', type=str, choices=['PI', 'NRTI', 'NNRTI'],
+                        help="Type of the drug used in the experiment (either PI, NRTI, or NNRTI). Used ONLY if " +
+                             "--type is set to HIV.")
+    parser.add_argument("--hiv-name", dest="hiv_name", default='DDI', type=str,
+                        help="Name of the drug used in the experiment. Used ONLY if --type is set to HIV.")
+    parser.add_argument("--hiv-number", dest="hiv_number", default=5, type=int,
+                        help="Number of the drug used in the experiment. Used ONLY if --type is set to HIV.")
+    parser.add_argument("--epochs", dest="epochs", default=200, type=int,
+                        help="Number of epochs used for training the CNN model.")
+    parser.add_argument("--batch-size", dest="batch_size", default=64, type=int,
+                        help="input batch size (default: 64)")
+
+    # parse the arguments
+    args = parser.parse_args()
+
+    # set the random seeds
+    np.random.seed(args.seed)
+
+    # if an output directory is specified, create the dir structure to store the output of the current run
+    args.save_logs = False
+    if args.outdir != "":
+        args.save_logs = True
+        args.outdir = args.outdir + "/CNN_experiment/{}/{}_{}/".format(args.type, args.hiv_type, args.hiv_name)
+        if not os.path.exists(args.outdir):
+            try:
+                os.makedirs(args.outdir)
+            except:
+                pass
+
+    return args
+
+
+# one-hot encoding of strings
+def encoding(in_str, alphabet, type='ordinal'):
+    if type == 'ordinal':
+        vector = [alphabet.index(letter) for letter in in_str]
+    elif type == 'one-hot':
+        vector = [[0 if char != letter else 1 for letter in in_str] for char in alphabet]
+    else:
+        raise ValueError('Unknown encoding type: {}'.format(type))
+    return torch.Tensor(vector)
+
+
+def count_classes(filepath, verbose=False, drug=7, num_classes=2):
+    class_count = [0] * num_classes
+    label_vec = []
+    nb_samples = 0
+
+    with open(filepath, 'rU') as handle:
+        for record in SeqIO.parse(handle, 'fasta'):
+            if drug == -1:
+                aux_lab = int(record.id.split('_')[1])
+                class_count[aux_lab] += 1
+                label_vec.append(aux_lab)
+            else:
+                aux_lab = record.id.split('|')[drug]
+                if num_classes == 2:
+                    if aux_lab == 'H':
+                        class_count[1] += 1
+                        label_vec.append(1)
+                    elif aux_lab == 'M':
+                        class_count[1] += 1
+                        label_vec.append(1)
+                    elif aux_lab == 'L':
+                        class_count[0] += 1
+                        label_vec.append(0)
+                    else:
+                        continue
+                else:
+                    if aux_lab == 'H':
+                        class_count[2] += 1
+                        label_vec.append(2)
+                    elif aux_lab == 'M':
+                        class_count[1] += 1
+                        label_vec.append(1)
+                    elif aux_lab == 'L':
+                        class_count[0] += 1
+                        label_vec.append(0)
+                    else:
+                        continue
+            nb_samples += 1
+
+    if verbose:
+        print("number of samples in dataset: {}".format(nb_samples))
+        if num_classes == 2:
+            print("class balance: resistant = {}, susceptible = {}".format(class_count[1] / nb_samples,
+                                                                           class_count[0] / nb_samples))
+        else:
+            print("class balance: H = {}, M = {}, L = {}".format(class_count[2] / nb_samples, class_count[1] /
+                                                                 nb_samples, class_count[0] / nb_samples))
+
+    if num_classes == 2:
+        expected_loss = -(class_count[0] / nb_samples) * np.log(0.5) - \
+                        (class_count[1] / nb_samples) * np.log(0.5)
+    else:
+        expected_loss = -(class_count[0] / nb_samples) * np.log(0.33) - \
+                        (class_count[1] / nb_samples) * np.log(0.33) -\
+                        (class_count[2] / nb_samples) * np.log(0.33)
+
+    if verbose:
+        print("expected loss: {}".format(expected_loss))
+
+    if num_classes == 2:
+        rand_guess = (class_count[0] / nb_samples) ** 2 + (class_count[1] / nb_samples) ** 2
+    else:
+        rand_guess = (class_count[0] / nb_samples) ** 2 + (class_count[1] / nb_samples) ** 2 + \
+                     (class_count[2] / nb_samples) ** 2
+
+    if verbose:
+        print("expected accuracy with random guessing: {}".format(rand_guess))
+
+    return class_count, expected_loss, np.array(label_vec)
 
 
 class Net(nn.Module):
-    def __init__(self):
+    def __init__(self, type):
+        # call __init__ of parent class
+        super(Net, self).__init__()
+
+        if type == 'PI':
+            out_len = 10
+        else:
+            out_len = 38
+
         # define the embedding layer of the CNN
-        self.embedding = nn.Embedding(num_embeddings=27, embedding_dim=3)
+        #self.embedding = nn.Embedding(num_embeddings=27, embedding_dim=3)
 
         # define the convolutional layers of the network
         self.cnn_layers = nn.Sequential(
-            nn.Conv1d(in_channels=3, out_channels=32, kernel_size=9),
+            nn.Conv1d(in_channels=27, out_channels=32, kernel_size=9),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=5),
             nn.Conv1d(in_channels=32, out_channels=32, kernel_size=9),
@@ -37,16 +177,19 @@ class Net(nn.Module):
 
         # define the linear layers of the network
         self.linear_layers = nn.Sequential(
-            nn.Linear(in_features=32 * 19, out_features=200),
+            nn.Linear(in_features=32 * out_len, out_features=200),
             nn.Linear(in_features=200, out_features=2)
         )
 
-    def forward(self, x_in):
-        x_out = self.embedding(x_in)
-        x_out = self.cnn_layers(x_out)
-        x_out = x_out.view(x_out.shape(0), -1)
+    def forward(self, x_in, proba=False):
+        #x_out = self.embedding(x_in)
+        x_out = self.cnn_layers(x_in)
+        x_out = x_out.view(x_out.shape[0], -1)
         x_out = self.linear_layers(x_out)
-        return x_out
+        if proba:
+            return x_out.sigmoid()
+        else:
+            return x_out
 
 
 class CustomDataset(data.Dataset):
@@ -83,7 +226,7 @@ class CustomDataset(data.Dataset):
 
     def __getitem__(self, item):
         # extract the sequence of the item
-        seq = str(self.data[item].seq)
+        seq = encoding(self.data[item].seq, PROTEIN, 'one-hot')
 
         # convert id string into label vector
         label = torch.zeros(2)
@@ -100,9 +243,125 @@ class CustomDataset(data.Dataset):
         return seq, label
 
 
-def experiment():
-    pass
+def experiment(args):
+    # load input data using the correct routine
+    if args.type == "HIV":
+        # create dataset handle
+        data_all = CustomDataset("../data/hivdb/{}_DataSet.fasta".format(args.hiv_type), extension="fasta",
+                                 exp_params=[args.type, args.hiv_number])
+
+        # get class count for ClassBalanceLoss
+        args.class_count, args.expected_loss, _ = count_classes("../data/hivdb/{}_DataSet.fasta".format(args.hiv_type),
+                                                                False, args.hiv_number)
+
+        # load stratified folds previously created
+        #   -> if your are missing the file 'hivdb_stratifiedFolds.pkl' (for HIV experiments), please run the file
+        #      'hivdb_preparation.py' (for HIV experiments) first. This python script can be found in the data folder.
+        with open('../data/hivdb/hivdb_stratifiedFolds.pkl', 'rb') as in_file:
+            folds = pickle.load(in_file)
+            folds = folds[args.hiv_type][args.hiv_name]
+    else:
+        ValueError('Unknown type of experiment')
+
+    # iterate over each fold of the stratified cross-validation
+    results = []
+    for fold in folds:
+        # initialize the CNN model
+        model = Net(args.hiv_type)
+
+        # initialize optimizer and loss function
+        criterion = ClassBalanceLoss(args.class_count, 2, 'sigmoid', 0.99, 1.0)
+        optimizer = optim.Adam(model.parameters(), lr=0.1, weight_decay=1e-6)
+        lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
+
+        # create subsets of the data that represent the training and validation split of the current fold and make
+        # these subsets accessable with a DataLoader
+        data_train = data.Subset(data_all, fold[0])
+        loader_train = data.DataLoader(data_train, batch_size=args.batch_size, shuffle=False)
+        data_val = data.Subset(data_all, fold[1])
+        loader_val = data.DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
+
+        # train the model
+        print('Start model training...')
+        model.train(True)
+        epoch_loss = None
+        for epoch in range(args.epochs):
+            # if the learning rate scheduler is 'ReduceLROnPlateau' and there is a current loss, the next
+            # lr step needs the current loss as input
+            if isinstance(lr_scheduler, ReduceLROnPlateau):
+                if epoch_loss is not None:
+                    lr_scheduler.step(epoch_loss)
+
+            # otherwise call the step() function of the learning rate scheduler
+            else:
+                lr_scheduler.step()
+
+            # iterate over the training data
+            running_loss = 0.0
+            for inputs, labels, *_ in loader_train:
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward + backward + optimizer
+                outputs = model(inputs)
+                loss = criterion(outputs, labels.argmax(1))
+                loss.backward()
+                optimizer.step()
+
+                # print statistics
+                running_loss += loss.item()
+
+            epoch_loss = running_loss / len(loader_train)
+            if epoch % 25 == 24:  # print every 500 mini-batches
+                print("    {}, loss: {}".format(epoch + 1, epoch_loss))
+
+        # calculate validation performance of trained model
+        model.train(False)
+        n_samples = len(loader_val.dataset)
+        batch_start = 0
+        for i, (inputs, labels, *_) in enumerate(loader_val):
+            # get the current batch size
+            batch_size = inputs.shape[0]
+
+            # do not keep track of the gradients
+            with torch.no_grad():
+                batch_out = model(inputs, True)
+
+            # initialize tensor that holds the results of the forward propagation for each sample
+            if i == 0:
+                outputs = torch.Tensor(n_samples, batch_out.shape[-1])
+                target_output = torch.Tensor(n_samples, labels.shape[-1]).type_as(labels)
+
+            # update output and target_output tensor with the current results
+            outputs[batch_start:batch_start + batch_size] = batch_out
+            target_output[batch_start:batch_start + batch_size] = labels
+
+            # continue with the next batch
+            batch_start += batch_size
+
+        # get performance matrices
+        outputs.squeeze_(-1)
+        res = compute_metrics(target_output, outputs)
+        results.append(res.to_dict())
+
+    # store the evaluation results of the current experiment
+    filename = '/validation_results_{}_{}.pkl'.format(args.epochs, args.batch_size)
+    with open(args.outdir + filename, 'wb') as out_file:
+        pickle.dump(results, out_file, pickle.HIGHEST_PROTOCOL)
+
+
+def main():
+    # parse arguments
+    args = load_args()
+
+    # check if the evaluation parameter was set
+    if args.eval:
+        pass
+
+    # if not, perform normal training of a CNN model
+    else:
+        experiment(args)
 
 
 if __name__ == '__main__':
-    pass
+    main()

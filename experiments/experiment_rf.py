@@ -14,11 +14,11 @@ from Bio import SeqIO
 import pickle
 from timeit import default_timer as timer
 
-from con import compute_metrics
+from cmkn import compute_metrics
 
 
 # meta variables
-PROTEIN = 'ARNDCQEGHILKMFPSTWYVXBZJUO'
+PROTEIN = 'ARNDCQEGHILKMFPSTWYVXBZJUO~'
 DNA = 'ACGTN'
 
 
@@ -53,8 +53,7 @@ def load_args():
     args.save_logs = False
     if args.outdir != "":
         args.save_logs = True
-        args.outdir = args.outdir + "/randomForest/{}/{}_{}/{}_{}".format(args.type, args.hiv_type, args.hiv_name,
-                                                                          args.n_estimators, args.max_features)
+        args.outdir = args.outdir + "/RF_experiment/{}/{}_{}/".format(args.type, args.hiv_type, args.hiv_name)
         if not os.path.exists(args.outdir):
             try:
                 os.makedirs(args.outdir)
@@ -143,7 +142,8 @@ def experiment(args):
         results.append(res.to_dict())
 
     # store the evaluation results of the current experiment
-    with open(args.outdir + '/validation_results.pkl', 'wb') as out_file:
+    filename = '/validation_results_{}_{}.pkl'.format(args.n_estimators, args.max_features)
+    with open(args.outdir + filename, 'wb') as out_file:
         pickle.dump(results, out_file, pickle.HIGHEST_PROTOCOL)
 
 
