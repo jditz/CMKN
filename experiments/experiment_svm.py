@@ -162,28 +162,32 @@ def evaluation(args):
     # evaluation needs pandas
     import pandas as pd
 
-    # check if file exists
-    try:
-        with open(args.outdir + '/validation_results.pkl', 'rb') as in_file:
-            val_results = pickle.load(in_file)
-    except FileNotFoundError:
-        raise ValueError('Specified result file does not exist')
-    except Exception as e:
-        raise('Unknown error: {}'.format(e))
+    # iterate over the specified model parameters for which the validation results will be displayed
+    for reg in args.reg_params:
+        for degree in args.deg_params:
+            try:
+                with open(args.outdir + '/validation_results_{}_{}.pkl'.format(degree, reg), 'rb') as in_file:
+                    val_results = pickle.load(in_file)
+            except FileNotFoundError:
+                raise ValueError('Specified result file does not exist')
+            except Exception as e:
+                raise('Unknown error: {}'.format(e))
 
-    # combine results of all folds into one data frame
-    results = []
-    for val_res in val_results:
-        results.append(pd.DataFrame.from_dict(val_res))
-    df_res = pd.concat(results, axis=1)
+            # combine results of all folds into one data frame
+            results = []
+            for val_res in val_results:
+                results.append(pd.DataFrame.from_dict(val_res))
+            df_res = pd.concat(results, axis=1)
 
-    # calculate mean and std over all folds
-    df_res['mean'] = df_res.mean(axis=1)
-    df_res['std'] = df_res[:-1].std(axis=1)
+            # calculate mean and std over all folds
+            df_res['mean'] = df_res.mean(axis=1)
+            df_res['std'] = df_res[:-1].std(axis=1)
 
-    #print the results
-    with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', None):
-        print(df_res)
+            #print the results
+            with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', None):
+                print("Results for SVM with degree {} and C = {}\n".format(degree, reg))
+                print(df_res)
+                print('\n--------------------------------------------------------------------------------\n\n')
 
 
 def main():

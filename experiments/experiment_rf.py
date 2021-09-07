@@ -153,7 +153,8 @@ def evaluation(args):
 
     # check if file exists
     try:
-        with open(args.outdir + '/validation_results.pkl', 'rb') as in_file:
+        filename = '/validation_results_{}_{}.pkl'.format(args.n_estimators, args.max_features)
+        with open(args.outdir + filename, 'rb') as in_file:
             val_results = pickle.load(in_file)
     except FileNotFoundError:
         raise ValueError('Specified result file does not exist')
@@ -172,6 +173,7 @@ def evaluation(args):
 
     # print the results
     with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', None):
+        print("Results for RF with {} trees and {} max features\n".format(args.n_estimators, args.max_features))
         print(df_res)
 
 

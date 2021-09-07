@@ -150,9 +150,9 @@ def load_args():
     """
     parser = argparse.ArgumentParser(description="CON example experiment")
     parser.add_argument('--seed', type=int, default=1, metavar='S', help='random seed (default: 1)')
-    parser.add_argument('--type', dest='type', default='HIV', type=str, choices=['HIV', 'ENCODE'],
-                        help="specify the type of experiment, i.e. the used dataset. Currently only 'HIV' and " +
-                             "'ENCODE' are supported choices")
+    parser.add_argument('--type', dest='type', default='HIV', type=str, choices=['HIV'],
+                        help="specify the type of experiment, i.e. the used dataset. Currently, only 'HIV' is "
+                             "supported.")
     parser.add_argument('--batch-size', dest="batch_size", type=int, default=64, metavar='M',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--epochs', dest="nb_epochs", type=int, default=200, metavar='N',
@@ -484,166 +484,12 @@ def train_hiv(args):
             print(e)
 
 
-def train_encode(args):
-    args.alphabet = 'ACGTN'
-
-    # specify the 100 randomly selected datasets used for hyper-parameter optimization
-    if args.encodeset == "optim":
-        train_ids = ['BHLHE40_A549_BHLHE40_Stanford', 'RAD21_H1-hESC_Rad21_HudsonAlpha', 'CTCF_AG04450_CTCF_UW',
-                     'CTCF_HSMMtube_CTCF_Broad', 'CTCF_HCFaa_CTCF_UW', 'TEAD4_K562_TEAD4_(SC-101184)_HudsonAlpha',
-                     'RXRA_HepG2_RXRA_HudsonAlpha', 'HDAC2_K562_HDAC2_(A300-705A)_Broad', 'CTCF_H1-hESC_CTCF_UT-A',
-                     'SIX5_H1-hESC_SIX5_HudsonAlpha', 'SIRT6_K562_SIRT6_Harvard', 'HMGN3_K562_HMGN3_Harvard',
-                     'TBP_HeLa-S3_TBP_Stanford', 'EZH2_HSMMtube_EZH2_(39875)_Broad', 'TAF1_K562_TAF1_HudsonAlpha',
-                     'TAF1_SK-N-SH_TAF1_HudsonAlpha', 'EP300_SK-N-SH-(Retinoic-Acid)_p300_HudsonAlpha',
-                     'HDAC2_K562_HDAC2_(A300-705A)_Broad', 'POLR2A_ProgFib_Pol2_UT-A', 'CTCF_NH-A_CTCF_Broad',
-                     'EP300_HeLa-S3_p300_(SC-584)_Stanford', 'TCF3_GM12878_TCF3_(SC-349)_HudsonAlpha',
-                     'YY1_HepG2_YY1_(SC-281)_HudsonAlpha', 'POLR2A_HCT-116_Pol2_USC', 'ETS1_K562_ETS1_HudsonAlpha',
-                     'CTCF_NHEK_CTCF_UT-A', 'CTCF_RPTEC_CTCF_UW', 'EGR1_GM12878_Egr-1_HudsonAlpha',
-                     'NR2C2_GM12878_TR4_USC', 'MYC_K562_c-Myc_Stanford', 'HNF4A_HepG2_HNF4A_(SC-8987)_HudsonAlpha',
-                     'CTCF_HeLa-S3_CTCF_UT-A', 'E2F6_K562_E2F6_HudsonAlpha', 'BRCA1_GM12878_BRCA1_(A300-000A)_Stanford',
-                     'TCF7L2_MCF-7_TCF7L2_USC', 'NFYB_GM12878_NF-YB_Harvard', 'CHD1_K562_CHD1_(A301-218A)_Broad',
-                     'TAF1_SK-N-SH_TAF1_HudsonAlpha', 'RAD21_IMR90_Rad21_Stanford', 'CTCF_GM12872_CTCF_UW',
-                     'YY1_GM12891_YY1_(SC-281)_HudsonAlpha', 'GATA3_MCF-7_GATA3_(SC-268)_USC',
-                     'HDAC6_K562_HDAC6_(A301-341A)_Broad', 'MAZ_HepG2_MAZ_(ab85725)_Stanford',
-                     'REST_K562_NRSF_HudsonAlpha', 'RCOR1_HeLa-S3_COREST_(sc-30189)_Stanford', 'CTCF_HMF_CTCF_UW',
-                     'CTCF_MCF-7_CTCF_UT-A', 'TBL1XR1_GM12878_TBLR1_(ab24550)_Stanford', 'NFE2_K562_NF-E2_Yale',
-                     'PHF8_K562_PHF8_(A301-772A)_Broad', 'EZH2_NHEK_EZH2_(39875)_Broad', 'CTCF_GM12865_CTCF_UW',
-                     'MXI1_GM12878_Mxi1_(AF4185)_Stanford', 'POLR2A_GM12892_Pol2_HudsonAlpha',
-                     'CHD1_K562_CHD1_(A301-218A)_Broad', 'RAD21_H1-hESC_Rad21_Stanford', 'CTCF_HEK293_CTCF_UW',
-                     'MEF2C_GM12878_MEF2C_(SC-13268)_HudsonAlpha', 'SMC3_HepG2_SMC3_(ab9263)_Stanford',
-                     'BHLHE40_HepG2_BHLHE40_(NB100-1800)_Stanford', 'POLR2A_HepG2_Pol2_UT-A',
-                     'JUN_HeLa-S3_c-Jun_Stanford', 'REST_H1-hESC_NRSF_HudsonAlpha', 'E2F6_K562_E2F6_HudsonAlpha',
-                     'ATF1_K562_ATF1_(06-325)_Harvard', 'EZH2_NHEK_EZH2_(39875)_Broad', 'MAX_A549_Max_Stanford',
-                     'RXRA_GM12878_RXRA_HudsonAlpha', 'CTCF_HEEpiC_CTCF_UW', 'RXRA_HepG2_RXRA_HudsonAlpha',
-                     'POLR2A_HUVEC_Pol2_HudsonAlpha', 'ELK1_GM12878_ELK1_(1277-1)_Stanford', 'JUN_HepG2_c-Jun_Stanford',
-                     'CTCF_SAEC_CTCF_UW', 'MXI1_H1-hESC_Mxi1_(AF4185)_Stanford', 'SP2_H1-hESC_SP2_(SC-643)_HudsonAlpha',
-                     'TBP_H1-hESC_TBP_Stanford', 'EZH2_HSMMtube_EZH2_(39875)_Broad', 'NFYB_GM12878_NF-YB_Harvard',
-                     'GATA2_HUVEC_GATA-2_USC', 'CTBP2_H1-hESC_CtBP2_USC', 'UBTF_K562_UBTF_(SAB1404509)_Stanford',
-                     'CTCF_Gliobla_CTCF_UT-A', 'CTCF_HCM_CTCF_UW', 'SRF_K562_SRF_HudsonAlpha', 'ELK4_HeLa-S3_ELK4_USC',
-                     'SMC3_GM12878_SMC3_(ab9263)_Stanford', 'CTCF_GM12873_CTCF_UW', 'GTF2B_K562_GTF2B_Harvard',
-                     'THAP1_K562_THAP1_(SC-98174)_HudsonAlpha', 'UBTF_K562_UBF_(sc-13125)_Stanford',
-                     'EP300_SK-N-SH-(Retinoic-Acid)_p300_HudsonAlpha', 'MXI1_H1-hESC_Mxi1_(AF4185)_Stanford',
-                     'CTCF_A549_CTCF_UT-A', 'POLR2A_GM12878_Pol2_UT-A', 'POLR2A_GM15510_Pol2_Stanford',
-                     'CTCF_H1-hESC_CTCF_(SC-5916)_HudsonAlpha', 'CTCF_NHDF-Ad_CTCF_Broad',
-                     'POLR2A_GM19099_Pol2_Stanford'
-                     ]
-    else:
-        train_ids = [args.encodeset]
-
-    # create ENCODE dataset handle
-    data_all = EncodeHandler(args.filepath, kmer_size=args.kmer_size, encode='onehot')
-
-    # iterate over all ids used in this trainings round
-    for tfid in train_ids:
-        # set random seeds
-        torch.manual_seed(args.seed)
-        if args.use_cuda:
-            torch.cuda.manual_seed(args.seed)
-        np.random.seed(args.seed)
-
-        # update the dataset to the correct transcription factor
-        data_all.update_dataset(tfid)
-
-        # Creating data indices for training and validation splits:
-        validation_split = .2
-        shuffle_dataset = True
-        random_seed = args.seed
-        dataset_size = len(data_all)
-        indices = list(range(dataset_size))
-        split = int(np.floor(validation_split * dataset_size))
-        if shuffle_dataset:
-            np.random.seed(random_seed)
-            np.random.shuffle(indices)
-        args.train_indices, args.val_indices = indices[split:], indices[:split]
-
-        # Creating PyTorch data samplers and loaders:
-        data_train = Subset(data_all, args.train_indices)
-        data_val = Subset(data_all, args.val_indices)
-
-        # set arguments for the DataLoader
-        loader_args = {}
-        if args.use_cuda:
-            loader_args = {'num_workers': 1, 'pin_memory': True}
-
-        loader_train = DataLoader(data_train, batch_size=args.batch_size, shuffle=False, **loader_args)
-        loader_val = DataLoader(data_val, batch_size=args.batch_size, shuffle=False, **loader_args)
-
-        # get distribution of classes for class balance loss
-        args.class_count, args.expected_loss = count_classes_encode(data_all.labels, True)
-
-        # initialize CON model
-        model = CMKN(in_channels=len(args.alphabet), out_channels_list=args.out_channels,
-                     filter_sizes=args.kernel_sizes, strides=args.strides, paddings=args.paddings,
-                     num_classes=args.num_classes, kernel_args=[args.sigma, args.scale, args.alpha],
-                     scaler=args.preprocessor, pool_global=None)
-
-        # initialize optimizer and loss function
-        criterion = nn.BCEWithLogitsLoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.1, weight_decay=1e-6)
-        lr_scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=4, min_lr=1e-4)
-
-        # train model
-        if args.use_cuda:
-            model.cuda()
-        acc, loss = model.sup_train(loader_train, criterion, optimizer, lr_scheduler, val_loader=loader_val,
-                                    epochs=args.nb_epochs, early_stop=False, use_cuda=args.use_cuda,
-                                    kmeans_init='kmeans++', distance='euclidean')
-
-        # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
-        # model
-        torch.save({'args': args, 'state_dict': model.state_dict(), 'acc': acc, 'loss': loss},
-                   args.outdir + "/CON_results_epochs" + str(args.nb_epochs) + "_" + tfid + ".pkl")
-
-        try:
-            # try to import pyplot
-            import matplotlib.pyplot as plt
-
-            # show the evolution of the acc and loss
-            fig2, axs2 = plt.subplots(2, 2)
-            axs2[0, 0].plot(acc['train'])
-            axs2[0, 0].set_title("train accuracy")
-            axs2[0, 0].set(xlabel='epoch', ylabel='accuracy')
-            axs2[0, 1].plot(acc['val'])
-            axs2[0, 1].set_title("val accuracy")
-            axs2[0, 1].set(xlabel='epoch', ylabel='accuracy')
-            axs2[1, 0].plot(loss['train'])
-            axs2[1, 0].set_title("train loss")
-            axs2[1, 0].set(xlabel='epoch', ylabel='loss')
-            axs2[1, 1].plot(loss['val'])
-            axs2[1, 1].set_title("val loss")
-            axs2[1, 1].set(xlabel='epoch', ylabel='loss')
-            # plt.show()
-            plt.savefig(args.outdir + "/acc_loss.png")
-
-            # show the position of the anchor points as a histogram
-            anchor = (torch.acos(model.cmkn_layer.pos_anchors[:, 0]) / np.pi) * (len(data_all.data[0]) - 1)
-            anchor = anchor.detach().cpu().numpy()
-            fig3 = plt.figure()
-            fig3.set_size_inches(w=20, h=10)
-            plt.hist(anchor, bins=range(len(data_all.data[0])))
-            # plt.xlim([0, ref_oli.size(1)])
-            plt.xlabel('Position')
-            plt.ylabel('# Anchor Points')
-            plt.title('Distribution of anchor points')
-            # plt.show()
-            plt.savefig(args.outdir + "/anchor_positions.png")
-
-        except ImportError:
-            print("Cannot import matplotlib.pyplot")
-
-        except Exception as e:
-            print("Unexpected error while trying to plot training visualisation:")
-            print(e)
-
-
 def main():
     # read parameter
     args = load_args()
 
     if args.type == 'HIV':
         train_hiv(args)
-    elif args.type == 'ENCODE':
-        train_encode(args)
     else:
         raise ValueError('Unknown experiment! Received the following argument: {}'.format(args.type))
 
