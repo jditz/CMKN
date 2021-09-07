@@ -36,15 +36,15 @@ def load_args():
     parser.add_argument('--seed', type=int, default=1, metavar='S', help='random seed (default: 1)')
     parser.add_argument("--outdir", metavar="outdir", dest="outdir", default='../output', type=str,
                         help="output path")
-    parser.add_argument("--eval", action='store_true', default=True, help="Use this flag to enter evaluation mode")
+    parser.add_argument("--eval", action='store_true', default=False, help="Use this flag to enter evaluation mode")
     parser.add_argument('--type', dest='type', default='HIV', type=str, choices=['HIV'],
                         help="specify the type of experiment.")
-    parser.add_argument("--hiv-type", dest="hiv_type", default='NNRTI', type=str, choices=['PI', 'NRTI', 'NNRTI'],
+    parser.add_argument("--hiv-type", dest="hiv_type", default='PI', type=str, choices=['PI', 'NRTI', 'NNRTI'],
                         help="Type of the drug used in the experiment (either PI, NRTI, or NNRTI). Used ONLY if " +
                              "--type is set to HIV.")
-    parser.add_argument("--hiv-name", dest="hiv_name", default='RPV', type=str,
+    parser.add_argument("--hiv-name", dest="hiv_name", default='SQV', type=str,
                         help="Name of the drug used in the experiment. Used ONLY if --type is set to HIV.")
-    parser.add_argument("--hiv-number", dest="hiv_number", default=4, type=int,
+    parser.add_argument("--hiv-number", dest="hiv_number", default=6, type=int,
                         help="Number of the drug used in the experiment. Used ONLY if --type is set to HIV.")
     parser.add_argument("--epochs", dest="epochs", default=200, type=int,
                         help="Number of epochs used for training the CNN model.")
