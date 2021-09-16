@@ -1,12 +1,5 @@
 """Module that contains classes and functions to handle input data for CMKN experiments.
 
-Classes:
-    CMKNDataset: A extension of PyTorch's DataSet class tailored for CMKN experiments.
-    EncodeLoader: A handler tailored for the ENCODE datasets.
-
-Functions:
-    double_shuffle: Implementation of dinucleotide shuffling.
-
 Attributes:
     ALPHABETS: A dictionary containing different biological alphabets.
 

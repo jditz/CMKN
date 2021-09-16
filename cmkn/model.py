@@ -1,9 +1,5 @@
 """Module that contains a basic implementation of a convolutional motif kernel network (CMKN).
 
-Classes:
-    CMKN: A basic implementation of a CMKN that provides the user with a little bit of freedom in shaping the
-        architecture of the network. In this network, a single convolutional motif kernel layer will be used.
-
 Authors:
     Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
 """

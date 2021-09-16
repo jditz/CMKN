@@ -1,11 +1,5 @@
 """Module that contains functions used to interpret a trained CMKN model.
 
-Functions:
-    seq2pwm: This function converts a sequence or a set of sequences into a position weight matrix (PWM).
-    model_interpretation: This function calculates the motif function values for a given sequence and each of the anchor
-        point motifs.
-    anchor_to_motivs: This function converts each of the anchor point motifs into png images.
-
 Authors:
     Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
 """
@@ -25,10 +19,10 @@ def seq2pwm(seq, alphabet='DNA_FULL'):
     sequences. If only one sequence is provided, the one-hot encoding matrix of the sequence will be returned.
 
     Args:
-        seq : Input to the function which can be given as a single sequence provided as a :ob:`str`, a set of sequences
-            provided as a :ob:`list` of :obj:`str`, or a NumPy ndarray of dimension m x n, where m is the number of
+        seq: Input to the function which can be given as a single sequence provided as a :obj:`str`, a set of sequences
+            provided as a :obj:`list` of :obj:`str`, or a NumPy ndarray of dimension m x n, where m is the number of
             sequences and n is the length of each sequence. If the input is a ndarray, each letter must be represented
-            by theír position in the alphabet (i.e. a number between 0 and |alphabet|-1)
+            by theír position in the alphabet (i.e. a number between 0 and len(alphabet)-1)
         alphabet (:obj:`str`): The alphabet that was used to build the input sequences. Defaults to 'DNA_FULL'.
 
     Returns:
@@ -37,7 +31,7 @@ def seq2pwm(seq, alphabet='DNA_FULL'):
 
     Raises:
         ValueError: If sequences are of different length
-        ValueError: If the input was neither a :obj:`str`, a :obj:`list`of :obj:`str`, nor a ndarray
+        ValueError: If the input was neither a :obj:`str`, a :obj:`list` of :obj:`str`, nor a ndarray
     """
 
     # get the alphabet

@@ -1,13 +1,8 @@
 """Module that contains different layers that can be used to construct a convolutional motif kernel network (CMKN).
 
-Classes:
-    CMKNLayer: Implementation of the convolutional motif kernel. A network must contain at least one CMKNLayer to be a
-        valid CMKN.
-    GlobalAvg1D: Layer that implements a global average pooling.
-    GlobalMax1D: Layer that implements a global max pooling.
-    GlobalSum1D: Layer that implements a global sum pooling.
-    LinearMax: Layer that implements a more complex linear classification in comparison to standard fully connected
-        layers.
+The main part of a convolutional motif kernel layer is implemented in the class CMKNLayer. The three pooling layers
+(GlobalAvg1D, GlobalMax1D, GlobalSum1D) provide custom global pooling layers while the LinearMax class is a custom
+linear classification layer that can be used within a ANN architecture.
 
 Authors:
     Jonas C. Ditz: jonas.ditz@uni-tuebingen.de

@@ -1,23 +1,8 @@
 """Module containing auxiliary functions used in different parts of the CMKN implementation.
 
-Classes:
-    ClassBalanceLoss: An PyTorch-friendly implementation of the class-balance loss.
-    MatrixInverseSqrt: Extension for PyTorch's Autograd module to incorporate the inverse square root of a matrix.
-
-Functions:
-    find_kmer_position: Utility to localize k-mers within a sequence.
-    kmer2dict: Utility to create a mapping of k-mers onto integers.
-    oli2tensor: Utility to convert a sequence into a 2-dimensional tensor.
-    create_consensus: Utility to create the consensus sequence for a given set of sequences.
-    build_kmer_ref_from_file: Utility to compute the starting frequencies for each k-mer at every position of a set of
-        sequences stored in a file.
-    build_kmer_ref_from_list: Utility to compute the starting frequencies for each k-mer at every position of a set of
-        sequences stored in a list.
-    category_from_output: Utility to select highest class from an output.
-    normalize_: Utility to normalize a matrix in a stable manner.
-    exp_motif: Exponential part of the convolutional motif kernel.
-    kmeans: Tensor-friendly (i.e. GPU-friendly) implementation of the k-Means algorithm. K-Means++ is supported.
-    compute_metrics: Compute different performance metrics for a prediction output.
+The functions and classes in this file provide functionalities that include accessing k-mer information within
+biological sequences (e.g. find_kmer_position, kmer2dict, oli2number, etc.), utilities to train a model (e.g.
+ClassBalanceLoss, exp_motif, k_mean, etc.), and utilities to evaluate trained models (e.g. compute_matrices, etc.).
 
 Attributes:
     EPS: A macro for relative tolerance.
@@ -37,7 +22,7 @@ from Bio import SeqIO
 import pandas as pd
 from scipy import stats
 from sklearn.metrics import (roc_auc_score, log_loss, accuracy_score, precision_recall_curve, average_precision_score,
-                             f1_score)
+                             f1_score, matthews_corrcoef)
 
 from timeit import default_timer as timer
 
@@ -896,6 +881,7 @@ def compute_metrics(y_true, y_pred):
     metric['log.loss'] = log_loss(y_true, y_pred)
     metric['accuracy'] = accuracy_score(y_true, y_pred > 0.5)
     metric['F_score'] = f1_score(y_true.argmax(axis=1), y_pred.argmax(axis=1))
+    metric['MCC'] = matthews_corrcoef(y_true.argmax(axis=1), y_pred.argmax(axis=1))
     metric['auROC'] = roc_auc_score(y_true, y_pred)
     metric['auROC50'] = roc_auc_score(y_true, y_pred, max_fpr=0.5)
     metric['auPRC'] = average_precision_score(y_true, y_pred)

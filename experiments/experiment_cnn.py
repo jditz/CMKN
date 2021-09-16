@@ -23,11 +23,6 @@ from cmkn import compute_metrics, ClassBalanceLoss
 # MACROS
 PROTEIN = 'ARNDCQEGHILKMFPSTWYVXBZJUO~'
 DNA = 'ACGTN'
-EMBEDDING_DIR = {"A": 1, "a": 1, "B": 2, "b": 2, "C": 3, "c": 3, "D": 4, "d": 4, "E": 5, "e": 5, "F": 6, "f": 6, "G": 7,
-                 "g": 7, "H": 8, "h": 8, "I": 9, "i": 9, "J": 10, "j": 10, "K": 11, "k": 11, "L": 12, "l": 12, "M": 13,
-                 "m": 13, "N": 14, "n": 14, "O": 15, "o": 15, "P": 16, "p": 16, "Q": 17, "q": 17, "R": 18, "r": 18,
-                 "S": 19, "s": 19, "T": 20, "t": 20, "U": 21, "u": 21, "V": 22, "v": 22, "W": 23, "w": 23, "X": 24,
-                 "x": 24, "Y": 25, "y": 25, "Z": 26, "z": 26, "~": 27}
 
 
 # function to parse line arguments
@@ -46,7 +41,7 @@ def load_args():
                         help="Name of the drug used in the experiment. Used ONLY if --type is set to HIV.")
     parser.add_argument("--hiv-number", dest="hiv_number", default=6, type=int,
                         help="Number of the drug used in the experiment. Used ONLY if --type is set to HIV.")
-    parser.add_argument("--epochs", dest="epochs", default=200, type=int,
+    parser.add_argument("--epochs", dest="epochs", default=500, type=int,
                         help="Number of epochs used for training the CNN model.")
     parser.add_argument("--batch-size", dest="batch_size", default=64, type=int,
                         help="input batch size (default: 64)")
@@ -164,11 +159,11 @@ class Net(nn.Module):
             out_len = 38
 
         # define the embedding layer of the CNN
-        #self.embedding = nn.Embedding(num_embeddings=27, embedding_dim=3)
+        self.embedding = nn.Embedding(num_embeddings=27, embedding_dim=3)
 
         # define the convolutional layers of the network
         self.cnn_layers = nn.Sequential(
-            nn.Conv1d(in_channels=27, out_channels=32, kernel_size=9),
+            nn.Conv1d(in_channels=3, out_channels=32, kernel_size=9),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=5),
             nn.Conv1d(in_channels=32, out_channels=32, kernel_size=9),
@@ -182,8 +177,8 @@ class Net(nn.Module):
         )
 
     def forward(self, x_in, proba=False):
-        #x_out = self.embedding(x_in)
-        x_out = self.cnn_layers(x_in)
+        x_out = self.embedding(x_in)
+        x_out = self.cnn_layers(torch.transpose(x_out, 1, 2))
         x_out = x_out.view(x_out.shape[0], -1)
         x_out = self.linear_layers(x_out)
         if proba:
@@ -217,6 +212,7 @@ class CustomDataset(data.Dataset):
 
             # store parameters
             self.drug_nb = exp_params[1]
+            self.encode_type = 'ordinal'
 
         else:
             ValueError('Unknown experiment type: {}'.format(exp_params[0]))
@@ -226,7 +222,9 @@ class CustomDataset(data.Dataset):
 
     def __getitem__(self, item):
         # extract the sequence of the item
-        seq = encoding(self.data[item].seq, PROTEIN, 'one-hot')
+        seq = encoding(self.data[item].seq, PROTEIN, self.encode_type)
+        if self.encode_type == 'ordinal':
+            seq = seq.type(torch.IntTensor)
 
         # convert id string into label vector
         label = torch.zeros(2)
