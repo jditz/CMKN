@@ -7,7 +7,9 @@
 #########################################################
 
 import unittest
-from .utils import kmer2dict, find_kmer_positions
+import random
+import time
+from cmkn import kmer2dict, find_kmer_positions, CMKNDataset
 
 
 class KmerTestCase(unittest.TestCase):
@@ -42,6 +44,22 @@ class KmerTestCase(unittest.TestCase):
     def test_find_kmer_positions(self):
         positions = find_kmer_positions(self.sequence, self.test_dict, self.kmer_size)
         self.assertEqual(positions, self.test_list)
+
+
+class DatasetTestCase(unittest.TestCase):
+    """
+    TestCase for the custom CMKN Dataset class.
+    """
+    def setUp(self):
+        # set the random seeds
+        current_time = time.time()
+        print("RNG seed for current test: {}".format(current_time))
+        random.seed(current_time)
+
+        # set up important parameters
+        self.batch_size = random.randint(1, 5)
+        self.dna_file = "data/test/dna_test.fasta"
+        self.protein_file = "data/test/protein_test.fasta"
 
 
 if __name__ == '__main__':
