@@ -200,7 +200,8 @@ class CMKNDataset(data.Dataset):
         Args:
             filepath (:obj:`str`): Path to the file containing the data.
             ext (:obj:`str`): Extension of the file containing the data. Defaults to 'fasta'.
-            kmer_size (:obj:`int`): Size of the kmers considered in the current experiment. Defaults to 3.
+            kmer_size (:obj:`int`): Size of the kmers considered in the current experiment. This attribute has no
+                functionality if the one-hot encoding was chosen. Defaults to 3.
             alphabet (:obj:`str`): Alphabet that was used to create the sequences in the dataset. Defaults to
                 'DNA_FULL'.
             clean_set (:obj:`tuple`): Specify if the dataset should be cleaned. Only works for fasta-ish files.

@@ -10,6 +10,8 @@ import unittest
 import random
 import time
 from cmkn import kmer2dict, find_kmer_positions, CMKNDataset
+import torch
+from torch.utils.data import DataLoader
 
 
 class KmerTestCase(unittest.TestCase):
@@ -50,16 +52,64 @@ class DatasetTestCase(unittest.TestCase):
     """
     TestCase for the custom CMKN Dataset class.
     """
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls) -> None:
         # set the random seeds
         current_time = time.time()
         print("RNG seed for current test: {}".format(current_time))
         random.seed(current_time)
 
         # set up important parameters
-        self.batch_size = random.randint(1, 5)
-        self.dna_file = "data/test/dna_test.fasta"
-        self.protein_file = "data/test/protein_test.fasta"
+        cls.batch_size = random.randint(1, 5)
+        cls.dna_file = "data/test/dna_test.fasta"
+        cls.protein_file = "data/test/protein_test.fasta"
+
+        # set up DNA and Protein DataLoader
+        dataset_dna = CMKNDataset(filepath=cls.dna_file, alphabet='DNA_FULL')
+        dataset_protein = CMKNDataset(filepath=cls.protein_file, alphabet='PROTEIN_FULL')
+        dataloader_dna = DataLoader(dataset_dna, batch_size=cls.batch_size)
+        dataloader_protein = DataLoader(dataset_protein, batch_size=cls.batch_size)
+
+        cls.samples_dna = next(iter(dataloader_dna))
+        cls.samples_protein = next(iter(dataloader_protein))
+
+    def test_outputDims(self):
+        # make sure the DataLoader produces tensors with correct shape
+        dna_shape = DatasetTestCase.samples_dna[0].shape
+        protein_shape = DatasetTestCase.samples_protein[0].shape
+
+        self.assertEqual(dna_shape[0], DatasetTestCase.batch_size)
+        self.assertEqual(dna_shape[1], 5)
+        self.assertEqual(dna_shape[2], 8)
+
+        self.assertEqual(protein_shape[0], DatasetTestCase.batch_size)
+        self.assertEqual(protein_shape[1], 26)
+        self.assertEqual(protein_shape[2], 8)
+
+    def test_onehotTensors(self):
+        # make sure that the one-hot encoding works fine
+        #     test sequence dna: AGGAGACT
+        #     test sequence protein: ETVPVKLK
+        dna_goal = torch.tensor([[1, 0, 0, 1, 0, 1, 0, 0], [0, 0, 0, 0, 0, 0, 1, 0], [0, 1, 1, 0, 1, 0, 0, 0],
+                                 [0, 0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.float)
+        protein_goal = torch.tensor([[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0],
+                                     [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0],
+                                     [1, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0],
+                                     [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1, 0, 1],
+                                     [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0, 0, 0],
+                                     [0, 0, 0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0],
+                                     [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 1, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0],
+                                     [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0],
+                                     [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.float)
+
+        self.assertTrue(torch.equal(DatasetTestCase.samples_dna[0][0, :, :], dna_goal))
+        self.assertTrue(torch.equal(DatasetTestCase.samples_protein[0][0, :, :], protein_goal))
+
+        # also test if all columns have unit l1 norm
+        self.assertEqual(torch.sum(DatasetTestCase.samples_dna[0].norm(p=1, dim=1)),
+                         DatasetTestCase.samples_dna[0].shape[0] * DatasetTestCase.samples_dna[0].shape[2])
+        self.assertEqual(torch.sum(DatasetTestCase.samples_protein[0].norm(p=1, dim=1)),
+                         DatasetTestCase.samples_protein[0].shape[0] * DatasetTestCase.samples_protein[0].shape[2])
 
 
 if __name__ == '__main__':
