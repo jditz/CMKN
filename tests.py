@@ -9,7 +9,7 @@
 import unittest
 import random
 import time
-from cmkn import kmer2dict, find_kmer_positions, CMKNDataset
+from cmkn import kmer2dict, find_kmer_positions, CMKNDataset, CMKNLayer
 import torch
 from torch.utils.data import DataLoader
 
@@ -56,7 +56,7 @@ class DatasetTestCase(unittest.TestCase):
     def setUpClass(cls) -> None:
         # set the random seeds
         current_time = time.time()
-        print("RNG seed for current test: {}".format(current_time))
+        print("RNG seed for DatasetTestCase: {}".format(current_time))
         random.seed(current_time)
 
         # set up important parameters
@@ -105,11 +105,41 @@ class DatasetTestCase(unittest.TestCase):
         self.assertTrue(torch.equal(DatasetTestCase.samples_dna[0][0, :, :], dna_goal))
         self.assertTrue(torch.equal(DatasetTestCase.samples_protein[0][0, :, :], protein_goal))
 
-        # also test if all columns have unit l1 norm
+        # test if all columns have unit l1 norm
         self.assertEqual(torch.sum(DatasetTestCase.samples_dna[0].norm(p=1, dim=1)),
                          DatasetTestCase.samples_dna[0].shape[0] * DatasetTestCase.samples_dna[0].shape[2])
         self.assertEqual(torch.sum(DatasetTestCase.samples_protein[0].norm(p=1, dim=1)),
                          DatasetTestCase.samples_protein[0].shape[0] * DatasetTestCase.samples_protein[0].shape[2])
+
+
+class CMKNLayerTestCase(unittest.TestCase):
+    """
+    TestCase for the CMKNLayer object.
+    """
+    @classmethod
+    def setUpClass(cls) -> None:
+        # set the random seeds
+        current_time = time.time()
+        print("RNG seed for CMKNLayerTestCase: {}".format(current_time))
+        random.seed(current_time)
+
+        cls.in_channels = random.randint(1, 20)
+        cls.out_channels = random.randint(1, 20)
+        cls.kmer_length = random.randint(1, 20)
+        cls.layer = CMKNLayer(cls.in_channels, cls.out_channels, cls.kmer_length)
+
+        # initialize weights with random values
+        torch.nn.init.xavier_normal_(cls.layer.weight)
+        torch.nn.init.xavier_normal_(cls.layer.pos_anchors)
+
+    def test_normalize(self):
+        CMKNLayerTestCase.layer.normalize_()
+
+        # check if all weights have columns with unit l1 norm
+        self.assertEqual(torch.sum(CMKNLayerTestCase.layer.weight.norm(p=1, dim=1)),
+                         CMKNLayerTestCase.out_channels * CMKNLayerTestCase.kmer_length)
+        self.assertEqual(torch.sum(CMKNLayerTestCase.layer.pos_anchors.norm(p=2, dim=1)),
+                         CMKNLayerTestCase.out_channels)
 
 
 if __name__ == '__main__':

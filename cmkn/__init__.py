@@ -16,6 +16,7 @@ Authors:
 """
 
 from .model import CMKN
+from .layers import CMKNLayer
 from .utils import (
     find_kmer_positions, kmer2dict, category_from_output, build_kmer_ref_from_file,
     build_kmer_ref_from_list, compute_metrics, register_hooks, plot_grad_flow, Hook, ClassBalanceLoss,
@@ -24,7 +25,7 @@ from .utils import (
 from .data_utils import CMKNDataset
 from .interpretability import seq2pwm, model_interpretation, anchors_to_motifs
 
-MODEL = ['CMKN', 'CMKNDataset', 'ClassBalanceLoss']
+MODEL = ['CMKN', 'CMKNlayer', 'CMKNDataset', 'ClassBalanceLoss']
 UTIL = ['find_kmer_positions', 'kmer2dict', 'build_kmer_ref_from_file', 'build_kmer_ref_from_list',
         'category_from_output', 'compute_metrics', 'create_consensus', 'oli2number', 'matrix_inverse_sqrt']
 INTERPRETATION = ['model_interpretation', 'seq2pwm', 'anchors_to_motifs']
