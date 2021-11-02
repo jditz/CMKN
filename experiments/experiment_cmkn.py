@@ -20,7 +20,7 @@ import numpy as np
 from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
 
 from cmkn import (CMKN, CMKNDataset, ClassBalanceLoss, kmer2dict, build_kmer_ref_from_file, build_kmer_ref_from_list,
-                 compute_metrics, create_consensus, oli2number)
+                  compute_metrics, create_consensus, oli2number)
 
 from Bio import SeqIO
 

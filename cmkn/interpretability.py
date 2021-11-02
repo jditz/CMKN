@@ -77,7 +77,7 @@ def seq2pwm(seq, alphabet='DNA_FULL'):
     return pwm
 
 
-def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, num_best=-1, viz=True, norm=True,
+def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, beta, num_best=-1, viz=True, norm=True,
                          threshold=0.1):
     """Visual interpretation of the learned model
 
@@ -96,6 +96,7 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
         alphabet (:obj:`str`): Alphabet of the sequences used for training the model
         sigma (:obj:`float`): sigma value used for the trained model
         alpha (:obj:`float`): Scaling parameter for the oligomer/motif comparison kernel
+        beta (:obj:`float`): Scaling parameter for position comparision term
         num_best (:obj:`int`): Indicates how many of the most informative anchors should be showed. All anchors
             are included, if set to -1.
         viz (:obj:`bool`): Indicates whether the matrix should be visualized using matplotlib
@@ -115,15 +116,31 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
     kmer_size = anchors_oli.shape[-1]
     seq_len = seq.shape[-1]
 
+    # set beta to the value dependend on the sequence length of non is specified
+    if beta == -1 or beta == None:
+        beta = seq_len**2 / 10
+
     # perform padding if necessary
     if kmer_size > 1:
         seq = np.concatenate((seq, np.zeros((seq.shape[0], kmer_size - 1))), axis=1)
 
     # convert anchor position vectors into sequence positions
+    #if len(anchors_pos.shape) == 1:
+    #    positions = anchors_pos
+    #elif len(anchors_pos.shape) == 2:
+    #    positions = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (seq_len - 1)
+    #else:
+    #    raise ValueError("Unexpected dimensionality of anchors_pos. Expected 1 or 2 dimensions, "
+    #                     "got {} dimensions".format(len(anchors_pos.shape)))
+    # if positions are given as plain sequence position, map them onto the upper half of the uni circle
     if len(anchors_pos.shape) == 1:
-        positions = anchors_pos
+        positions = np.zeros((2, len(anchors_pos)))
+        for i in range(len(anchors_pos)):
+            positions[0, i] = np.cos((anchors_pos[i] / seq_len) * np.pi)
+            positions[1, i] = np.sin((anchors_pos[i] / seq_len) * np.pi)
     elif len(anchors_pos.shape) == 2:
-        positions = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (seq_len - 1)
+        positions = anchors_pos
+        anchors_pos = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (seq_len - 1)
     else:
         raise ValueError("Unexpected dimensionality of anchors_pos. Expected 1 or 2 dimensions, "
                          "got {} dimensions".format(len(anchors_pos.shape)))
@@ -135,12 +152,12 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
     for i in range(anchors_oli.shape[0]):
 
         # convert anchor position into discrete sequence positions with corresponding weights
-        weight2, pos1 = math.modf(positions[i])
+        weight2, pos1 = math.modf(anchors_pos[i])
         pos1 = int(pos1)
         pos2 = pos1 + 1
         weight1 = 1 - weight2
 
-        print(i, positions[i])
+        print(i, anchors_pos[i])
 
         # create the sequence motif of the input sequence at the current anchor position
         seq_motif = weight1 * seq[:, pos1:pos1+kmer_size] + weight2 * seq[:, pos2:pos2+kmer_size]
@@ -152,11 +169,11 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
         for j in range(seq_len):
 
             #seq_motif = seq[:, j:j+kmer_size]
-            #posi = np.array(range(0, seq_len))
+            aux_pos = np.array([np.cos(((j + 1) / seq_len) * np.pi), np.sin(((j + 1) / seq_len) * np.pi)])
 
-            # calculate the oligo function for the current anchor point at the current sequence position
-            image_matrix[i, j] = np.exp(alpha * (np.vdot(anchor_motif, seq_motif) - kmer_size) -
-                                        (1/(np.pi * sigma**2)) * ((j - positions[i])**2))
+            # calculate the motif function for the current anchor point at the current sequence position
+            image_matrix[i, j] = np.exp(alpha/2 * (np.vdot(anchor_motif, seq_motif) - kmer_size) -
+                                        (beta/(2 * sigma**2)) * (np.linalg.norm(aux_pos - positions[:, i])**2))
 
     # scale matrix between 0 and 1
     if norm:

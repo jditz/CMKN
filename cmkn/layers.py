@@ -311,17 +311,17 @@ class CMKNLayer(nn.Conv1d):
         """ Function to enforce the constraints on the anchor points.
 
         The kernel function is valid iff all anchor point positions have unit l2-norm and each anchor point motif is a
-        valid Position Weight Matrix (PWM).
+        valid normalized Position Frequency Matrix (nPFM).
 
         Updates:
             self.weight (out_channels x in_channels): These represent the motif of anchor points
             self.pos_anchors (out_channels x 2): These represent the encoded position of anchor points
         """
-        # make sure the motifs of all motifs are valid PWMs by
+        # make sure the motifs of all motifs are valid nPFMs by
         #   1. make sure each number is positive
-        #   2. make sure each column of the motif sums to one
+        #   2. make sure each column of the motif has unit l2-norm
         self.weight.data.clamp_(min=0)
-        norm = self.weight.data.norm(p=1, dim=1).view(-1, 1, self.filter_size)
+        norm = self.weight.data.norm(p=2, dim=1).view(-1, 1, self.filter_size)
         norm.clamp_(min=EPS)
         self.weight.data.div_(norm)
 
