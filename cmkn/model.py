@@ -337,12 +337,13 @@ class CMKN(nn.Module):
         n_oligomers = 0
 
         # determine the number of oligomers sampled from each batch
-        #   -> if this number cannot be calculated, sample 1000 oligomers from each batch until n_sampling_olis are
-        #      sampled
+        #   -> if this number cannot be calculated or is below 1000, sample 1000 oligomers from each batch until
+        #      n_sampling_olis are sampled
         try:
-            n_oligomers_per_batch = (n_sampling_motifs + len(data_loader) - 1) // len(data_loader)
+            n_oligomers_per_batch = max((n_sampling_motifs + len(data_loader) - 1) // len(data_loader), 500)
         except:
-            n_oligomers_per_batch = 1000
+            n_oligomers_per_batch = 500
+        print('        {} oligomers per batch will be sampled'.format(n_oligomers_per_batch))
 
         # depending on the chosen distance measure for the k-Means algorithm, oligomers will incorporate positional
         # information

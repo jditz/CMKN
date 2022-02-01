@@ -14,6 +14,7 @@ Authors:
 
 import numpy as np
 from itertools import combinations, product
+import warnings
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -21,6 +22,7 @@ from Bio import SeqIO
 
 import pandas as pd
 from scipy import stats
+from sklearn.cluster import KMeans
 from sklearn.metrics import (roc_auc_score, log_loss, accuracy_score, precision_recall_curve, average_precision_score,
                              f1_score, matthews_corrcoef)
 
@@ -457,35 +459,135 @@ class ClassBalanceLoss(nn.Module):
         self.gamma = gamma
         self.reduction = reduction
 
-    def focal_loss(self, labels, logits, alpha):
-        """Compute the focal loss between `logits` and the ground truth `labels`.
+        effective_num = 1.0 - np.power(self.beta, self.samples_per_cls)
+        weights = (1.0 - self.beta) / np.array(effective_num)
+        weights = weights / np.sum(weights) * self.no_of_classes
+        print(weights)
 
-        Focal loss = -alpha_t * (1-pt)^gamma * log(pt), where pt is the probability of being classified to the true
-        class.
-        pt = p (if true class), otherwise pt = 1 - p. p = sigmoid(logit).
+    def one_hot(self, labels, num_classes, device, dtype=None, eps=1e-6):
+        """Convert an integer label x-D tensor to a one-hot (x+1)-D tensor. Implementation by Kornia
+        (https://github.com/kornia).
 
         Args:
-            labels (Tensor): True label of each sample given as a tensor of shape (batch_size x num_classes).
-            logits (Tensor): Output of the network given as a tensor of shape (batch_size x num_classes).
-            alpha (Tensor): Per-example weight for balanced cross entropy given as a tensor of shape (batch_size).
+            labels: tensor with labels of shape :math:`(N, *)`, where N is batch size.
+              Each value is an integer representing correct classification.
+            num_classes: number of classes in labels.
+            device: the desired device of returned tensor.
+            dtype: the desired data type of returned tensor.
 
         Returns:
-            A float32 scalar representing normalized total loss.
+            the labels in one hot tensor of shape :math:`(N, C, *)`,
+
+        Examples:
+            >>> labels = torch.LongTensor([[[0, 1], [2, 0]]])
+            >>> one_hot(labels, num_classes=3)
+            tensor([[[[1.0000e+00, 1.0000e-06],
+                      [1.0000e-06, 1.0000e+00]],
+            <BLANKLINE>
+                     [[1.0000e-06, 1.0000e+00],
+                      [1.0000e-06, 1.0000e-06]],
+            <BLANKLINE>
+                     [[1.0000e-06, 1.0000e-06],
+                      [1.0000e+00, 1.0000e-06]]]])
         """
-        BCLoss = F.binary_cross_entropy_with_logits(input=logits, target=labels, reduction="none")
+        if not isinstance(labels, torch.Tensor):
+            raise TypeError(f"Input labels type is not a torch.Tensor. Got {type(labels)}")
 
-        if self.gamma == 0.0:
-            modulator = 1.0
+        if not labels.dtype == torch.int64:
+            raise ValueError(f"labels must be of the same dtype torch.int64. Got: {labels.dtype}")
+
+        if num_classes < 1:
+            raise ValueError("The number of classes must be bigger than one." " Got: {}".format(num_classes))
+
+        shape = labels.shape
+        one_hot = torch.zeros((shape[0], num_classes) + shape[1:], device=device, dtype=dtype)
+
+        return one_hot.scatter_(1, labels.unsqueeze(1), 1.0) + eps
+
+    def focal_loss(self, input, target, alpha, gamma=2.0, reduction='none', eps=None):
+        """Criterion that computes Focal loss. Implementation by Kornia (https://github.com/kornia).
+
+        According to :cite:`lin2018focal`, the Focal loss is computed as follows:
+
+        .. math::
+
+            \text{FL}(p_t) = -\alpha_t (1 - p_t)^{\gamma} \, \text{log}(p_t)
+
+        Where:
+
+           - :math:`p_t` is the model's estimated probability for each class.
+
+        Args:
+            input: logits tensor with shape :math:`(N, C, *)` where C = number of classes.
+            target: labels tensor with shape :math:`(N, *)` where each value is :math:`0 ≤ targets[i] ≤ C−1`.
+            alpha: Weighting factor :math:`\alpha \in [0, 1]`.
+            gamma: Focusing parameter :math:`\gamma >= 0`.
+            reduction: Specifies the reduction to apply to the
+              output: ``'none'`` | ``'mean'`` | ``'sum'``. ``'none'``: no reduction
+              will be applied, ``'mean'``: the sum of the output will be divided by
+              the number of elements in the output, ``'sum'``: the output will be
+              summed.
+            eps: Deprecated: scalar to enforce numerical stabiliy. This is no longer used.
+
+        Return:
+            the computed loss.
+
+        Example:
+            >>> N = 5  # num_classes
+            >>> input = torch.randn(1, N, 3, 5, requires_grad=True)
+            >>> target = torch.empty(1, 3, 5, dtype=torch.long).random_(N)
+            >>> output = focal_loss(input, target, alpha=0.5, gamma=2.0, reduction='mean')
+            >>> output.backward()
+        """
+        if eps is not None and not torch.jit.is_scripting():
+            warnings.warn(
+                "`focal_loss` has been reworked for improved numerical stability "
+                "and the `eps` argument is no longer necessary",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        if not isinstance(input, torch.Tensor):
+            raise TypeError(f"Input type is not a torch.Tensor. Got {type(input)}")
+
+        if not len(input.shape) >= 2:
+            raise ValueError(f"Invalid input shape, we expect BxCx*. Got: {input.shape}")
+
+        if input.size(0) != target.size(0):
+            raise ValueError(
+                f'Expected input batch_size ({input.size(0)}) to match target batch_size ({target.size(0)}).')
+
+        n = input.size(0)
+        out_size = (n,) + input.size()[2:]
+        if target.size()[1:] != input.size()[2:]:
+            raise ValueError(f'Expected target size {out_size}, got {target.size()}')
+
+        if not input.device == target.device:
+            raise ValueError(f"input and target must be in the same device. Got: {input.device} and {target.device}")
+
+        # compute softmax over the classes axis
+        input_soft: torch.Tensor = F.softmax(input, dim=1)
+        log_input_soft: torch.Tensor = F.log_softmax(input, dim=1)
+
+        # create the labels one hot tensor
+        target_one_hot: torch.Tensor = self.one_hot(target, num_classes=input.shape[1], device=input.device,
+                                                    dtype=input.dtype)
+
+        # compute the actual focal loss
+        weight = torch.pow(-input_soft + 1.0, gamma)
+
+        focal = -alpha * weight * log_input_soft
+        loss_tmp = torch.einsum('bc...,bc...->b...', (target_one_hot, focal))
+
+        if reduction == 'none':
+            loss = loss_tmp
+        elif reduction == 'mean':
+            loss = torch.mean(loss_tmp)
+        elif reduction == 'sum':
+            loss = torch.sum(loss_tmp)
         else:
-            modulator = torch.exp(-self.gamma * labels * logits - self.gamma * torch.log(1 + torch.exp(-1.0 * logits)))
-
-        loss = modulator * BCLoss
-
-        weighted_loss = alpha * loss
-        focal_loss = torch.sum(weighted_loss)
-
-        focal_loss /= torch.sum(labels)
-        return focal_loss
+            raise NotImplementedError(f"Invalid reduction mode: {reduction}")
+        return loss
 
     def forward(self, logits, labels):
         """Compute the Class Balanced Loss between `logits` and the ground truth `labels`.
@@ -570,6 +672,7 @@ class MatrixInverseSqrt(torch.autograd.Function):
         return grad_input, None
 """
 
+
 class MatrixInverseSqrt(torch.autograd.Function):
     """Matrix inverse square root for a symmetric definite positive matrix
     """
@@ -580,7 +683,7 @@ class MatrixInverseSqrt(torch.autograd.Function):
         use_cuda = input.is_cuda
         if input.size(0) < 300:
             input = input.cpu()
-        e, v = torch.symeig(input, eigenvectors=True)
+        e, v = torch.linalg.eigh(input, UPLO='U')
         if use_cuda and input.size(0) < 300:
             e = e.cuda()
             v = v.cuda()
@@ -701,7 +804,7 @@ def _init_kmeans(x, n_clusters, n_local_trials=None, use_cuda=False, distance='e
     return clusters
 
 
-def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, init=None, tol=1e-4):
+def kmeans_gpu(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, init=None, tol=1e-4):
     """Performing k-Means clustering (Lloyd's algorithm) with Tensors utilizing GPU resources.
 
     Args:
@@ -729,7 +832,7 @@ def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, ini
     n_samples, n_features = x.size()
 
     # determine initialization procedure for this run of the k-Means algorithm
-    if init == "kmeans++":
+    if init == "k-means++":
         print("        Initialization method for k-Means: k-Means++")
         clusters = _init_kmeans(x, n_clusters, use_cuda=use_cuda, distance=distance)
     elif init is None:
@@ -787,6 +890,45 @@ def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, ini
         prev_sim = sim_mean
 
     return clusters
+
+
+def kmeans(x, n_clusters, distance='euclidian', max_iters=100, verbose=True, init=None, tol=1e-4, use_cuda=False):
+    """Wrapper for the k-Means clustering algorithm to utilize either GPU or CPU resources.
+
+    Args:
+        x (Tensor): Data that will be used for clustering provided as a tensor of shape (n_samples x n_dimensions).
+        n_clusters (:obj:`int`): Number of clusters that will be computed.
+        distance (:obj:`str`): Distance measure used for clustering. Defaults to 'euclidean'.
+        max_iters (:obj:`int`): Maximal number of iterations used in the K-Means clustering. Defaults to 100.
+        verbose (:obj:`bool`): Flag to activate verbose output. Defaults to True.
+        init (:obj:`str`): Initialization process for the K-Means algorithm. Defaults to None.
+        tol (:obj:`float`): Relative tolerance with regards to Frobenius norm of the difference in the cluster centers
+            of two consecutive iterations to declare convergence. It's not advised to set `tol=0` since convergence
+            might never be declared due to rounding errors. Use a very small number instead. Defaults to 1e-4.
+        use_cuda (:obj:`bool`): Determine whether to utilize GPU resources or compute kmeans on CPU resources. If set to
+            False, scikit-learn's implementation of kmeans will be used. Defaults to False.
+
+    Returns:
+        Cluster centers calculated by the K-Means algorithm provided as a tensor of shape (n_clusters x n_dimensions).
+    """
+    # use GPU implementation if use_cuda was set to true
+    if use_cuda:
+        clusters = kmeans_gpu(x, n_clusters, distance, max_iters, verbose, init, tol)
+
+    # otherwise, cast Tensors to numpy arrays and use scikit-learn's implementation of kmeans
+    else:
+        aux_x = x.cpu().numpy()
+        sklearn_kmeans = KMeans(n_clusters=n_clusters, init=init, max_iter=max_iters, tol=tol, verbose=int(verbose),
+                                algorithm='full').fit(aux_x)
+
+        clusters = torch.Tensor(sklearn_kmeans.cluster_centers_)
+
+        # make sure that the cluster centers are on the GPU if the input is on the GPU
+        if x.is_cuda:
+            clusters = clusters.cuda()
+
+    return clusters
+
 
 
 #############################################################################
@@ -872,6 +1014,7 @@ def compute_metrics(y_true, y_pred):
     Args:
         y_true (Tensor): True label for each sample provided as a tensor of shape (n_sample x n_classes).
         y_pred (Tensor): Predicted label for each sample provided as a tensor of shape (n_samples x n_classes).
+        binary (:obj:`int`): Indicates whether the classification task is binary
 
     Returns:
         Different performance metrics for the provided predictions as a Pandas DataFrame.

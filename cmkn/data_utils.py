@@ -11,7 +11,7 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-from Bio import SeqIO
+from Bio.SeqIO.FastaIO import SimpleFastaParser
 from collections import defaultdict
 from sklearn.model_selection import train_test_split
 
@@ -228,24 +228,27 @@ class CMKNDataset(data.Dataset):
         self.kmer_size = kmer_size
 
         if self.ext == "fasta":
-            # parse input data
-            aux = list(SeqIO.parse(filepath, ext))
-
-            # check if all sequences have the same length
-            #   -> store length if true, raise exception otherwise
-            if all(len(x.seq) == len(aux[0].seq) for x in aux):
-                self.seq_len = len(aux[0].seq)
-            else:
-                raise ValueError('Sequences are of different length!')
+            # parse input data and check if all sequences have the same length
+            aux = []
+            get_length = True
+            with open(filepath) as handle:
+                for record in SimpleFastaParser(handle):
+                    if get_length:
+                        self.seq_len = len(record[1])
+                        get_length = False
+                    else:
+                        if len(record[1]) != self.seq_len:
+                            raise ValueError('Sequences are of different length!')
+                    aux.append(record)
 
             # clean dataset of invalid samples iff the file is fasta-ish and a cleaning criterion, i.e. the column of
-            # the id string that holds the class label information, is provided
+            # the id string that holds the class label information, is provided.
             if clean_set is not None:
-                self.data = [i.seq for i in aux if i.id.split('|')[clean_set[0]] != clean_set[1]]
-                self.labels = [i.id for i in aux if i.id.split('|')[clean_set[0]] != clean_set[1]]
+                self.data = [i[1] for i in aux if i[0].split('|')[clean_set[0]] != clean_set[1]]
+                self.labels = [i[0] for i in aux if i[0].split('|')[clean_set[0]] != clean_set[1]]
             else:
-                self.data = [i.seq for i in aux]
-                self.labels = [i.id for i in aux]
+                self.data = [i[1] for i in aux]
+                self.labels = [i[0] for i in aux]
 
         elif self.ext == "seq.gz":
             # make sure that the alphabet is given in the correct format

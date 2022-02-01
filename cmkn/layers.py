@@ -152,8 +152,9 @@ class CMKNLayer(nn.Conv1d):
             max_iters (:obj:`int`): Maximal number of iterations used in the K-Means clustering.
 
         Updates:
-            self.weight (out_channels x in_channels): These represent the motif of anchor points
-            self.pos_anchors (out_channels x 2): These represent the encoded position of anchor points
+            The function updates to class parameters: self.weight and self.pos_anchors. The first parameter,
+            self.weight, represents the anchor points' motifs and the second, self.pos_anchors, represents the anchor
+            points' encoded position.
         """
         # perform spherical k-means algorithm on the given motif tensor or motif-position tensor
         motif_tensor = kmeans(motifs, self.out_channels, distance=distance, init=init, max_iters=max_iters)
@@ -314,8 +315,9 @@ class CMKNLayer(nn.Conv1d):
         valid normalized Position Frequency Matrix (nPFM).
 
         Updates:
-            self.weight (out_channels x in_channels): These represent the motif of anchor points
-            self.pos_anchors (out_channels x 2): These represent the encoded position of anchor points
+            The function updates to class parameters: self.weight and self.pos_anchors. The first parameter,
+            self.weight, represents the anchor points' motifs and the second, self.pos_anchors, represents the anchor
+            points' encoded position.
         """
         # make sure the motifs of all motifs are valid nPFMs by
         #   1. make sure each number is positive

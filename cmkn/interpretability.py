@@ -8,14 +8,15 @@ import os
 import math
 
 import numpy as np
+import torch
 
 from .data_utils import ALPHABETS
 
 
-def seq2pwm(seq, alphabet='DNA_FULL'):
-    """Converts sequences into a position weight matrix (PWM).
+def seq2ppm(seq, alphabet='DNA_FULL'):
+    """Converts sequences into a position probability matrix (PPM).
 
-    This function takes sequences and an alphabet and returns the position weight matrix (PWM) of the set of
+    This function takes sequences and an alphabet and returns the position probability matrix (PPM) of the set of
     sequences. If only one sequence is provided, the one-hot encoding matrix of the sequence will be returned.
 
     Args:
@@ -73,8 +74,8 @@ def seq2pwm(seq, alphabet='DNA_FULL'):
             pfm[v, i] = counts[j]
 
     # calculate the PWM
-    pwm = pfm / np.sum(pfm, axis=0)
-    return pwm
+    ppm = pfm / np.sum(pfm, axis=0)
+    return ppm
 
 
 def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, beta, num_best=-1, viz=True, norm=True,
@@ -110,7 +111,7 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
     # if the sequence is given as a string, convert it into a one-hot encoding matrix
     aux = seq
     if isinstance(seq, str):
-        seq = seq2pwm(seq, alphabet)
+        seq = seq2ppm(seq, alphabet)
 
     # perform zero padding to the end of the sequence to prevent out-of-bound errors
     kmer_size = anchors_oli.shape[-1]
@@ -168,7 +169,7 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
         # iterate over each sequence position
         for j in range(seq_len):
 
-            #seq_motif = seq[:, j:j+kmer_size]
+            # seq_motif = seq[:, j:j+kmer_size]
             aux_pos = np.array([np.cos(((j + 1) / seq_len) * np.pi), np.sin(((j + 1) / seq_len) * np.pi)])
 
             # calculate the motif function for the current anchor point at the current sequence position
@@ -258,12 +259,14 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
                    "G": TextPath((-0.384, 0), "G", size=1, prop=fp),
                    "U": TextPath((-0.384, 0), "U", size=1, prop=fp),
                    "A": TextPath((-0.35, 0), "A", size=1, prop=fp),
-                   "C": TextPath((-0.366, 0), "C", size=1, prop=fp)}
+                   "C": TextPath((-0.366, 0), "C", size=1, prop=fp),
+                   "N": TextPath((-0.35, 0), "N", size=1, prop=fp)}
         COLOR_SCHEME = {'G': 'orange',
                         'A': 'darkgreen',
                         'C': 'blue',
                         'T': 'red',
-                        'U': 'red'}
+                        'U': 'red',
+                        'N': 'black'}
     elif type.split('_')[0] == 'PROTEIN':
         LETTERS = {"G": TextPath((-0.384, 0), "G", size=1, prop=fp),
                    "S": TextPath((-0.366, 0), "S", size=1, prop=fp),
@@ -332,7 +335,7 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
         aux_norm[aux_norm == 0] = 1e-6
         cur_anchor = cur_anchor / aux_norm
 
-        # utelize the eps argument
+        # utilize the eps argument
         if isinstance(eps, int):
             # set each value to zero except the k biggest values
             cur_anchor = cur_anchor * (cur_anchor >= np.sort(cur_anchor, axis=0)[[-eps], :]).astype(int)
@@ -386,3 +389,319 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
             plt.close(fig)
         else:
             plt.show()
+
+
+def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=False, win_len=10):
+    """Analysis of weight distribution
+
+    This function loads a trained CMKN model and calculates the mean positive weight associated with each class for all
+    sequence positions. Optionally, a sliding window approach is provided for peak detection.
+
+    Args:
+        model_path (:obj:`str`): Path to the trained CMKN model. The trained network has to be stored in a dictionary
+            where the learned parameters are stored with the id 'state_dict'.
+        num_classes (:obj:`int`): Number of classes in the classification problem.
+        seq_len (:obj:`int`): Length of the sequences that were used to train the CMKN model.
+        layers (:obj:`list` of :obj:`str`): List of the layer names that connect the output of the kernel layer to each
+            class prediction. The layers has to be in reverse order as they are in the network, i.e. the first name
+            should be that of the classification layer, etc.
+        viz_peaks (:obj:`bool`): Indicates whether peaks computed with a sliding window approach should be displayed. If
+            set to yes, a window of the specified size will be slided over the whole sequence length and the mean and
+            std of the mean weights in that window will be calculated. If a position has a mean weight that is two times
+            the std higher than the mean of the corresponding window, it will be marked as a peak.
+        win_len (:obj:`int`): Length of the window used for the sliding window approach.
+
+    Returns:
+        A dictionary containing the indices of weights at each layer that positively contributes to a specific class.
+        This return value is mostly interesting for the package function get_learned_motif and can be safely ignored by
+        most users.
+    """
+
+    # load the trained CMKN model
+    model = torch.load(model_path)
+    model = model['state_dict']
+
+    # auxiliary variables used for propagating class association through the network
+    aux_weights = {}
+    aux_values = [{} for _ in range(num_classes)]
+    aux_mean = np.zeros([num_classes, seq_len])
+    prev_layer = ''
+
+    # iterate over each layer
+    for i, layer in enumerate(layers):
+
+        # if the current layer is the classification layer, get each input that is positively associated with each
+        # class (i.e. that are connected with that class by a positive weight)
+        if i == 0:
+            # get the weights of the classification layer
+            aux_weights[layer] = model[layer + '.weight'].cpu()
+
+            # get positive indices of positive weights for each class
+            for j in range(num_classes):
+                aux_indices = aux_weights[layer][j, :] > 0
+                aux_indices = aux_indices.nonzero()
+                aux_values[j][layer] = aux_indices
+
+            # store this layer's name to access the right indices at the next layer
+            prev_layer = layer
+
+        # do the same for each neurons that belong to layers that are neither the classification layer nor the last
+        # layer before the kernel layer
+        elif i != len(layers) - 1:
+            raise NotImplementedError('Currently, the function get_weight_distribution only supports two layers.')
+            # TODO: implement propagation of class association through each layer if there are more than two
+
+            # store this layer's name to access the right indices at the next layer
+            prev_layer = layer
+
+        # if the current layer is the first after the kernel layer, calculate the mean positive weight
+        else:
+            # calculate mean weight for each class
+            for j in range(num_classes):
+
+                # go over each positions positively connected with the current class
+                for idx in aux_values[j][prev_layer]:
+
+                    # get the weights for the current index
+                    current_weights = model[layer + '.weight'][idx.item(), :].view(-1, seq_len).cpu().numpy()
+
+                    # iterate over sequence length and calculate mean weight at each position
+                    for k in range(seq_len):
+                        idx_positives = current_weights[:, k] > 0
+                        aux_mean[j, k] += (np.mean(current_weights[idx_positives, k]) *
+                                           aux_weights[prev_layer][j, idx.item()])
+
+                # divide sum of weights by number of weights
+                aux_mean[j, :] /= len(aux_values[j][prev_layer])
+
+            # normalize by the number of layers to ensure comparability
+            aux_mean *= len(layers)
+
+    try:
+        import matplotlib.pyplot as plt
+
+        # get positions where the mean weight is at least two standard derivations higher than the mean within the
+        # window position +- win_len
+        peaks = [[]] * num_classes
+        for i in range(num_classes):
+            for j in range(seq_len):
+
+                # skip position if the selected window size does not fit
+                if j < win_len/2 or j > seq_len - (win_len/2 + 1):
+                    continue
+
+                # calculate mean and std of the current window
+                window = aux_mean[i, j - int(win_len/2):j + int(win_len/2)]
+                mean_window = np.mean(window)
+                std_window = np.std(window)
+
+                # the current position is a peak if the value is higher than the window's mean plus two times the std
+                # of the window
+                if aux_mean[i, j] > mean_window + 2 * std_window:
+                    peaks[i].append(j)
+
+        # If there are only two classes, plot weight distributions for negative class in blue and weight distribution
+        # for positive class in red. A single plot will be used and the weight distribution for the negative class is
+        # mirrored on the x-axis.
+        if num_classes == 2:
+            plt.figure()
+            plt.plot(aux_mean[1, :], 'r')
+            plt.plot(aux_mean[0, :] * -1, 'b')
+            if viz_peaks:
+                plt.scatter(peaks[1], [aux_mean[1, p] for p in peaks[1]], c='r', s=60, marker=(5, 2))
+                plt.scatter(peaks[0], [aux_mean[0, p] * -1 for p in peaks[0]], c='b', s=60, marker=(5, 2))
+            plt.title('Mean Weight Distribution')
+            plt.show()
+
+        # if there are more than two classes, plot weight distribution for each class in a separate plot
+        else:
+            fig, axs = plt.subplots(num_classes)
+            for i in range(num_classes):
+                axs[i].plot(aux_mean[i, :])
+                if viz_peaks:
+                    axs[i].scatter(peaks[i], [aux_mean[i, p] for p in peaks[i]], c='r', s=60, marker=(5, 2))
+                axs[i].set_title('Class: {}'.format(i))
+            plt.title('Mean Weight Distribution')
+            plt.show()
+
+    except ImportError:
+        print("Cannot import matplotlib.pyplot")
+
+    except Exception as e:
+        print("Unexpected error while trying to plot mean weight distribution:")
+        print(e)
+
+    # return the weights of each motif at each sequence position
+    return aux_values
+
+
+def get_learned_motif(model_path, positions, num_classes, seq_len, layers, thld=None, viz=True, eps=1e-4):
+    """Compute learned motif at specified sequence positions
+
+    This function takes a trained CMKN model and a set of sequence positions and calculates the learned motif at the s
+    specified positions. The learned motif is calculated by computing a weighted mean motif out of all the anchors with
+    a positive contribution at the position. A positive contribution is defined by either having a weight that exceeds
+    the specified threshold or having a weight that is 2 std higher than the mean weight at the position.
+
+    Args:
+        model_path (:obj:`str`): Path to the trained CMKN model. The trained network has to be stored in a dictionary
+            where the learned parameters are stored with the id 'state_dict'.
+        positions (:obj:`list` of :obj:`int`): Set of position for which the learned motif should be computed. The
+            positions have to be 0-based (i.e. sequence position 1 will be given as 0).
+        num_classes (:obj:`int`): Number of classes in the classification problem.
+        seq_len (:obj:`int`): Length of the sequences that were used to train the CMKN model.
+        layers (:obj:`list` of :obj:`str`): List of the layer names that connect the output of the kernel layer to each
+            class prediction. The layers has to be in reverse order as they are in the network, i.e. the first name
+            should be that of the classification layer, etc. The last layer in the list has to be the kernel layer.
+        thld (:obj:`float`): Threshold used to decide which anchors should be included in the computation of the learned
+            motif. Defaults to None.
+        viz (:obj:`bool`): Indicates whether the learned motifs should be visualized with matplotlib or not. Defaults to
+            True.
+        eps (:obj:`float` or :obj:`int`): Parameter of the motif visualization function, will be ignored if viz is set
+            to False. If a floating point number is given, values below this threshold will be set to 0. If an integer
+            is given, only the top k values will be used in the motif (k is the integer provided). This argument can be
+            used to denoise motifs or display only the most informative parts.
+
+    Returns:
+        A dictionary containing a Tensor of shape (number of positions, alphabet size, motif length) for each of the
+        classes. The tensors are holding the learned motifs.
+    """
+
+    # if an integer/float is given as the threshold this will be used as a hard threshold
+    if isinstance(thld, int) or isinstance(thld, float):
+        threshold = thld
+    else:
+        thld = None
+
+    # load the trained CMKN model
+    model = torch.load(model_path)
+    args = model['args']
+    model = model['state_dict']
+
+    # get the indices indicating which weights belong to which class
+    aux_indices = get_weight_distribution(model_path, num_classes, seq_len, layers[:-1], False)
+
+    # initiate tensor to hold the mean motif at each position
+    aux_learned_motifs = {}
+    for i in range(num_classes):
+        aux_learned_motifs[i] = torch.zeros(len(positions), len(args.alphabet), args.kmer_size)
+
+    # iterate over all specified positions
+    for i, pos in enumerate(positions):
+
+        # iterate over all classes to get the motifs for each class
+        for j in range(num_classes):
+
+            # initialize needed auxiliary variables
+            aux_anchors = torch.empty(0)
+            aux_anchors_weights = torch.empty(0)
+
+            # iterate over all entries that belong to the current class
+            for idx in aux_indices[j][layers[-3]]:
+
+                # get the weights of the last layer before the kernel layer
+                aux_weights = model[layers[-2] + '.weight'][idx.item(), :].view(-1, seq_len).cpu()
+
+                # if no threshold was set by the user, include all anchors with a weight 2x STD over the mean value
+                if thld is None:
+                    aux_pos_weights = aux_weights[:, pos] > 0
+                    aux_std_mean = torch.std_mean(aux_weights[aux_pos_weights, pos], dim=0, unbiased=True)
+                    threshold = aux_std_mean[1].item() + 2 * aux_std_mean[0].item()
+
+                # store each contributing anchor and the corresponding weight of that anchor
+                valid_anchors = aux_weights[:, pos] >= threshold
+                aux_anchors = torch.cat((aux_anchors, valid_anchors.nonzero().flatten()), 0)
+                aux_anchors_weights = torch.cat((aux_anchors_weights, aux_weights[valid_anchors, pos].flatten() *
+                                                 model[layers[-3] + '.weight'][j, idx.item()].cpu().item()), 0)
+
+            # get the learned motif at the i-th position for the j-th class
+            if len(aux_anchors) > 0:
+                aux_motif = torch.mean(model[layers[-1] + '.weight'][aux_anchors.type(torch.long), :, :].cpu() *
+                                       aux_anchors_weights.reshape(-1, 1, 1), dim=0)
+                aux_learned_motifs[j][i, :, :] = aux_motif
+            else:
+                print('No learned motif at position {} for class {}'.format(i+1, j))
+
+    if viz:
+        # select the correct type of alphabet
+        if len(args.alphabet) > 5:
+            alphabet = 'PROTEIN_FULL'
+        else:
+            alphabet = 'DNA_FULL'
+
+        # display learned motif for each position and each class
+        for i, pos in enumerate(positions):
+            for j in range(num_classes):
+                # convert motifs into position weight matrices using a simple background model that assumes equal
+                # propability of each symbol
+                pwm_motifs = torch.log2(aux_learned_motifs[j][i, :, :].view(1, len(args.alphabet), args.kmer_size) /
+                                        (1/len(args.alphabet))) * -1
+
+                print('displaying learned motif for class {} at position {}...'.format(j, pos + 1))
+                anchors_to_motifs(pwm_motifs, alphabet, eps=eps)
+
+    return aux_learned_motifs
+
+
+def visualize_kernel_activation(model, kernel_layer, sequence):
+    """Visualization of the kernel layer activation.
+
+    This function takes a trained CMKN model, the name of the kernel layer, and an input sequence as a one-hot encoding
+    vector and visualizes the activation of the kernel layer for inspection.
+
+    Args:
+        model (trained CMKN model): A trained CMKN model whose kernel layer activation will be visualized.
+        kernel_layer ('obj':`str`): The kernel layer's name that will be visualized. It is possible ot visualize several
+        different kernel layers by providing the names as a list of string.
+        sequence (Tensor): The sequence for which the activation of the kernel layer will be visualized. This sequence
+        has to be presented in form of a one-hot encoded Tensor. It is possible to visualize the activation of several
+        sequences at once by providing the Tensors in batch form.
+    """
+    # initialize the dict that holds the activations
+    activations = {}
+
+    # determine the number of sequences given
+    nb_seq = sequence.shape[0]
+
+    # define the hook function for the forward hooks
+    def get_activation(l_name):
+        def hook(module, input, output):
+            activations[l_name] = output.detach()
+        return hook
+
+    # make sure the kernel layer's name is a list
+    if isinstance(kernel_layer, list):
+        layers = kernel_layer
+    elif isinstance(kernel_layer, str):
+        layers = [kernel_layer]
+    else:
+        raise ValueError('Argument kernel_layer has unsupported type: {}'.format(type(kernel_layer)))
+
+    # iterate through the layers in the model and register hook for each specified layer
+    for name, layer in model.named_modules():
+        if name in layers:
+            layer.register_forward_hook(get_activation(name))
+
+    # perform the forward pass with the given input and capture the activations
+    _ = model(sequence)
+
+    # visualize the activation
+    try:
+        import matplotlib.pyplot as plt
+
+        # create the activation plots for each layer and each sequence
+        for i in range(nb_seq):
+            for j in layers:
+                plt.figure()
+                plt.title('Activation of {} for sequence {}'.format(j, i))
+                plt.imshow(activations[j].numpy()[i, :, :])
+
+        # show the activation plots
+        plt.show()
+
+    except ImportError:
+        print("Cannot import matplotlib.pyplot")
+
+    except Exception as e:
+        print("Unexpected error while trying to plot mean weight distribution:")
+        print(e)
