@@ -158,8 +158,6 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
         pos2 = pos1 + 1
         weight1 = 1 - weight2
 
-        print(i, anchors_pos[i])
-
         # create the sequence motif of the input sequence at the current anchor position
         seq_motif = weight1 * seq[:, pos1:pos1+kmer_size] + weight2 * seq[:, pos2:pos2+kmer_size]
 
