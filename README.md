@@ -42,6 +42,6 @@ from the root of the project. The ground truth needed for the tests is stored in
 
 The documentation is written with `sphinx`. You can build it by running
 
-    $ cd doc && make html
+    $ cd docs && make html
 
 from the root of the project. The entry point for the documentation will be placed in `doc/_build/html/index.html` which you can open with a browser of your choice.
