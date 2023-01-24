@@ -6,6 +6,7 @@ setup(
     description="Implementation of the convolutional motif kernel network (CMKN) architecture.",
     author="Jonas Ditz",
     author_email="jonas.ditz@uni-tuebingen.de",
+    packages=["cmkn"],
     python_requires=">=3.7, <3.10",
     install_requires=[
         "numpy>=1.19.2",
@@ -16,7 +17,9 @@ setup(
         "scikit-learn>=0.24.1",
         "torch>=1.8.1",
         "torchvision>=0.9.1",
-        "torchaudio>=0.8.1"
+        "torchaudio>=0.8.1",
+        "sphinx",
+        "sphinx_bootstrap_theme"
     ],
     zip_safe=False
 )
