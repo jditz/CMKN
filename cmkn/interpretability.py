@@ -4,8 +4,8 @@ Authors:
     Jonas C. Ditz: jonas.ditz@uni-tuebingen.de
 """
 
-import os
 import math
+import os
 
 import numpy as np
 import torch
@@ -13,7 +13,7 @@ import torch
 from .data_utils import ALPHABETS
 
 
-def seq2ppm(seq, alphabet='DNA_FULL'):
+def seq2ppm(seq, alphabet="DNA_FULL"):
     """Converts sequences into a position probability matrix (PPM).
 
     This function takes sequences and an alphabet and returns the position probability matrix (PPM) of the set of
@@ -47,7 +47,7 @@ def seq2ppm(seq, alphabet='DNA_FULL'):
     elif all(isinstance(item, str) for item in seq):
         # all sequences have to have the same length
         if not all(len(item) == len(seq[0]) for item in seq):
-            raise ValueError('All sequences must be of same length')
+            raise ValueError("All sequences must be of same length")
 
         x = np.zeros((len(seq), len(seq[0])), dtype=np.int8)
         for i, s in enumerate(seq):
@@ -58,7 +58,7 @@ def seq2ppm(seq, alphabet='DNA_FULL'):
         x = seq
 
     else:
-        raise ValueError('Unknown type of input seq: {}'.format(type(seq)))
+        raise ValueError("Unknown type of input seq: {}".format(type(seq)))
 
     # create the position frequency matrix (PFM)
     #   -> this will be used to calculate the PWM
@@ -78,8 +78,19 @@ def seq2ppm(seq, alphabet='DNA_FULL'):
     return ppm
 
 
-def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, beta, num_best=-1, viz=True, norm=True,
-                         threshold=0.1):
+def model_interpretation(
+    seq,
+    anchors_oli,
+    anchors_pos,
+    alphabet,
+    sigma,
+    alpha,
+    beta,
+    num_best=-1,
+    viz=True,
+    norm=True,
+    threshold=0.1,
+):
     """Visual interpretation of the learned model
 
     This function converts the learned anchors into a 2d matrix where each row represents one motif and each column
@@ -119,18 +130,18 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
 
     # set beta to the value dependend on the sequence length of non is specified
     if beta == -1 or beta == None:
-        beta = seq_len**2 / 10
+        beta = seq_len ** 2 / 10
 
     # perform padding if necessary
     if kmer_size > 1:
         seq = np.concatenate((seq, np.zeros((seq.shape[0], kmer_size - 1))), axis=1)
 
     # convert anchor position vectors into sequence positions
-    #if len(anchors_pos.shape) == 1:
+    # if len(anchors_pos.shape) == 1:
     #    positions = anchors_pos
-    #elif len(anchors_pos.shape) == 2:
+    # elif len(anchors_pos.shape) == 2:
     #    positions = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (seq_len - 1)
-    #else:
+    # else:
     #    raise ValueError("Unexpected dimensionality of anchors_pos. Expected 1 or 2 dimensions, "
     #                     "got {} dimensions".format(len(anchors_pos.shape)))
     # if positions are given as plain sequence position, map them onto the upper half of the uni circle
@@ -141,10 +152,14 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
             positions[1, i] = np.sin((anchors_pos[i] / seq_len) * np.pi)
     elif len(anchors_pos.shape) == 2:
         positions = anchors_pos
-        anchors_pos = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (seq_len - 1)
+        anchors_pos = (np.arccos(np.reshape(anchors_pos, (-1, 2))[:, 0]) / np.pi) * (
+            seq_len - 1
+        )
     else:
-        raise ValueError("Unexpected dimensionality of anchors_pos. Expected 1 or 2 dimensions, "
-                         "got {} dimensions".format(len(anchors_pos.shape)))
+        raise ValueError(
+            "Unexpected dimensionality of anchors_pos. Expected 1 or 2 dimensions, "
+            "got {} dimensions".format(len(anchors_pos.shape))
+        )
 
     # initialize the vizualisation matrix
     image_matrix = np.zeros((anchors_oli.shape[0], seq_len))
@@ -159,20 +174,33 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
         weight1 = 1 - weight2
 
         # create the sequence motif of the input sequence at the current anchor position
-        seq_motif = weight1 * seq[:, pos1:pos1+kmer_size] + weight2 * seq[:, pos2:pos2+kmer_size]
+        seq_motif = (
+            weight1 * seq[:, pos1 : pos1 + kmer_size]
+            + weight2 * seq[:, pos2 : pos2 + kmer_size]
+        )
 
         # get the current anchor motif
-        anchor_motif = np.reshape(anchors_oli[i, :, :], (anchors_oli.shape[1], kmer_size))
+        anchor_motif = np.reshape(
+            anchors_oli[i, :, :], (anchors_oli.shape[1], kmer_size)
+        )
 
         # iterate over each sequence position
         for j in range(seq_len):
 
             # seq_motif = seq[:, j:j+kmer_size]
-            aux_pos = np.array([np.cos(((j + 1) / seq_len) * np.pi), np.sin(((j + 1) / seq_len) * np.pi)])
+            aux_pos = np.array(
+                [
+                    np.cos(((j + 1) / seq_len) * np.pi),
+                    np.sin(((j + 1) / seq_len) * np.pi),
+                ]
+            )
 
             # calculate the motif function for the current anchor point at the current sequence position
-            image_matrix[i, j] = np.exp(alpha/2 * (np.vdot(anchor_motif, seq_motif) - kmer_size) -
-                                        (beta/(2 * sigma**2)) * (np.linalg.norm(aux_pos - positions[:, i])**2))
+            image_matrix[i, j] = np.exp(
+                alpha / 2 * (np.vdot(anchor_motif, seq_motif) - kmer_size)
+                - (beta / (2 * sigma ** 2))
+                * (np.linalg.norm(aux_pos - positions[:, i]) ** 2)
+            )
 
     # scale matrix between 0 and 1
     if norm:
@@ -202,10 +230,10 @@ def model_interpretation(seq, anchors_oli, anchors_pos, alphabet, sigma, alpha, 
             image_matrix = image_matrix[idx_oliSort, :]
 
         plt.figure()
-        plt.imshow(image_matrix, interpolation=None, aspect='auto')
+        plt.imshow(image_matrix, interpolation=None, aspect="auto")
         plt.colorbar()
-        plt.xlabel('Sequence Position')
-        plt.ylabel('Anchor')
+        plt.xlabel("Sequence Position")
+        plt.ylabel("Anchor")
         plt.yticks(range(num_best), idx_oliSort)
         plt.show()
 
@@ -235,10 +263,10 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
     """
     # import needed libraries
     import matplotlib as mpl
-    from matplotlib.text import TextPath
-    from matplotlib.patches import PathPatch
-    from matplotlib.font_manager import FontProperties
     import matplotlib.pyplot as plt
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.patches import PathPatch
+    from matplotlib.text import TextPath
 
     from .data_utils import ALPHABETS
 
@@ -252,70 +280,81 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
     # initialize needed functionality
     fp = FontProperties(family="Arial", weight="bold")
     globscale = 1.35
-    if type.split('_')[0] == 'DNA':
-        LETTERS = {"T": TextPath((-0.305, 0), "T", size=1, prop=fp),
-                   "G": TextPath((-0.384, 0), "G", size=1, prop=fp),
-                   "U": TextPath((-0.384, 0), "U", size=1, prop=fp),
-                   "A": TextPath((-0.35, 0), "A", size=1, prop=fp),
-                   "C": TextPath((-0.366, 0), "C", size=1, prop=fp),
-                   "N": TextPath((-0.35, 0), "N", size=1, prop=fp)}
-        COLOR_SCHEME = {'G': 'orange',
-                        'A': 'darkgreen',
-                        'C': 'blue',
-                        'T': 'red',
-                        'U': 'red',
-                        'N': 'black'}
-    elif type.split('_')[0] == 'PROTEIN':
-        LETTERS = {"G": TextPath((-0.384, 0), "G", size=1, prop=fp),
-                   "S": TextPath((-0.366, 0), "S", size=1, prop=fp),
-                   "T": TextPath((-0.305, 0), "T", size=1, prop=fp),
-                   "Y": TextPath((-0.305, 0), "Y", size=1, prop=fp),
-                   "C": TextPath((-0.366, 0), "C", size=1, prop=fp),
-                   "Q": TextPath((-0.375, 0), "Q", size=1, prop=fp),
-                   "N": TextPath((-0.35, 0), "N", size=1, prop=fp),
-                   "K": TextPath((-0.39, 0), "K", size=1, prop=fp),
-                   "R": TextPath((-0.35, 0), "R", size=1, prop=fp),
-                   "H": TextPath((-0.35, 0), "H", size=1, prop=fp),
-                   "D": TextPath((-0.366, 0), "D", size=1, prop=fp),
-                   "E": TextPath((-0.33, 0), "E", size=1, prop=fp),
-                   "A": TextPath((-0.35, 0), "A", size=1, prop=fp),
-                   "V": TextPath((-0.335, 0), "V", size=1, prop=fp),
-                   "L": TextPath((-0.33, 0), "L", size=1, prop=fp),
-                   "I": TextPath((-0.14, 0), "I", size=1, prop=fp),
-                   "P": TextPath((-0.305, 0), "P", size=1, prop=fp),
-                   "W": TextPath((-0.48, 0), "W", size=1, prop=fp),
-                   "F": TextPath((-0.305, 0), "F", size=1, prop=fp),
-                   "M": TextPath((-0.415, 0), "M", size=1, prop=fp),
-                   "X": TextPath((-0.35, 0), "X", size=1, prop=fp)}
-        COLOR_SCHEME = {'G': 'darkgreen',
-                        'S': 'darkgreen',
-                        'T': 'darkgreen',
-                        'Y': 'darkgreen',
-                        'C': 'darkgreen',
-                        'Q': 'darkgreen',
-                        'N': 'darkgreen',
-                        'K': 'blue',
-                        'R': 'blue',
-                        'H': 'blue',
-                        'D': 'red',
-                        'E': 'red',
-                        'A': 'black',
-                        'V': 'black',
-                        'L': 'black',
-                        'I': 'black',
-                        'P': 'black',
-                        'W': 'black',
-                        'F': 'black',
-                        'M': 'black',
-                        'X': 'brown'}
+    if type.split("_")[0] == "DNA":
+        LETTERS = {
+            "T": TextPath((-0.305, 0), "T", size=1, prop=fp),
+            "G": TextPath((-0.384, 0), "G", size=1, prop=fp),
+            "U": TextPath((-0.384, 0), "U", size=1, prop=fp),
+            "A": TextPath((-0.35, 0), "A", size=1, prop=fp),
+            "C": TextPath((-0.366, 0), "C", size=1, prop=fp),
+            "N": TextPath((-0.35, 0), "N", size=1, prop=fp),
+        }
+        COLOR_SCHEME = {
+            "G": "orange",
+            "A": "darkgreen",
+            "C": "blue",
+            "T": "red",
+            "U": "red",
+            "N": "black",
+        }
+    elif type.split("_")[0] == "PROTEIN":
+        LETTERS = {
+            "G": TextPath((-0.384, 0), "G", size=1, prop=fp),
+            "S": TextPath((-0.366, 0), "S", size=1, prop=fp),
+            "T": TextPath((-0.305, 0), "T", size=1, prop=fp),
+            "Y": TextPath((-0.305, 0), "Y", size=1, prop=fp),
+            "C": TextPath((-0.366, 0), "C", size=1, prop=fp),
+            "Q": TextPath((-0.375, 0), "Q", size=1, prop=fp),
+            "N": TextPath((-0.35, 0), "N", size=1, prop=fp),
+            "K": TextPath((-0.39, 0), "K", size=1, prop=fp),
+            "R": TextPath((-0.35, 0), "R", size=1, prop=fp),
+            "H": TextPath((-0.35, 0), "H", size=1, prop=fp),
+            "D": TextPath((-0.366, 0), "D", size=1, prop=fp),
+            "E": TextPath((-0.33, 0), "E", size=1, prop=fp),
+            "A": TextPath((-0.35, 0), "A", size=1, prop=fp),
+            "V": TextPath((-0.335, 0), "V", size=1, prop=fp),
+            "L": TextPath((-0.33, 0), "L", size=1, prop=fp),
+            "I": TextPath((-0.14, 0), "I", size=1, prop=fp),
+            "P": TextPath((-0.305, 0), "P", size=1, prop=fp),
+            "W": TextPath((-0.48, 0), "W", size=1, prop=fp),
+            "F": TextPath((-0.305, 0), "F", size=1, prop=fp),
+            "M": TextPath((-0.415, 0), "M", size=1, prop=fp),
+            "X": TextPath((-0.35, 0), "X", size=1, prop=fp),
+        }
+        COLOR_SCHEME = {
+            "G": "darkgreen",
+            "S": "darkgreen",
+            "T": "darkgreen",
+            "Y": "darkgreen",
+            "C": "darkgreen",
+            "Q": "darkgreen",
+            "N": "darkgreen",
+            "K": "blue",
+            "R": "blue",
+            "H": "blue",
+            "D": "red",
+            "E": "red",
+            "A": "black",
+            "V": "black",
+            "L": "black",
+            "I": "black",
+            "P": "black",
+            "W": "black",
+            "F": "black",
+            "M": "black",
+            "X": "brown",
+        }
     else:
-        raise ValueError('Unknown alphabet type: {}!'.format(type.split('_')[0]))
+        raise ValueError("Unknown alphabet type: {}!".format(type.split("_")[0]))
 
     def letterAt(letter, x, y, yscale=1, ax=None):
         text = LETTERS[letter]
 
-        t = mpl.transforms.Affine2D().scale(1 * globscale, yscale * globscale) + \
-            mpl.transforms.Affine2D().translate(x, y) + ax.transData
+        t = (
+            mpl.transforms.Affine2D().scale(1 * globscale, yscale * globscale)
+            + mpl.transforms.Affine2D().translate(x, y)
+            + ax.transData
+        )
         p = PathPatch(text, lw=0, fc=COLOR_SCHEME[letter], transform=t)
         if ax != None:
             ax.add_artist(p)
@@ -323,10 +362,11 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
 
     # iterate through the anchor points
     for anchor in range(anchor_points.shape[0]):
-        print('creating motif for anchor {}...'.format(anchor))
+        # print('creating motif for anchor {}...'.format(anchor))
 
         # store current anchor as a numpy array
         cur_anchor = anchor_points[anchor, :, :].cpu().numpy()
+        cur_anchor[cur_anchor == float("Inf")] = 1e-6
 
         # make sure that each column of the anchor has unit l1 norm
         aux_norm = np.linalg.norm(cur_anchor, ord=1, axis=0)
@@ -336,7 +376,9 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
         # utilize the eps argument
         if isinstance(eps, int):
             # set each value to zero except the k biggest values
-            cur_anchor = cur_anchor * (cur_anchor >= np.sort(cur_anchor, axis=0)[[-eps], :]).astype(int)
+            cur_anchor = cur_anchor * (
+                cur_anchor >= np.sort(cur_anchor, axis=0)[[-eps], :]
+            ).astype(int)
         else:
             # remove all values that are below the threshold
             cur_anchor[cur_anchor < eps] = 0
@@ -381,15 +423,19 @@ def anchors_to_motifs(anchor_points, type="DNA_FULL", outdir="", eps=1e-4):
         plt.xlim((0, x))
         plt.ylim((0, maxi))
         plt.tight_layout()
-        plt.axis('off')
+        plt.axis("off")
         if outdir != "":
-            plt.savefig(outdir + str(anchor).zfill(3) + "-anchor.png", bbox_inches='tight')
+            plt.savefig(
+                outdir + str(anchor).zfill(3) + "-anchor.png", bbox_inches="tight"
+            )
             plt.close(fig)
         else:
             plt.show()
 
 
-def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=False, win_len=10):
+def get_weight_distribution(
+    model_path, num_classes, seq_len, layers, viz_peaks=False, win_len=10
+):
     """Analysis of weight distribution
 
     This function loads a trained CMKN model and calculates the mean positive weight associated with each class for all
@@ -412,18 +458,18 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
     Returns:
         A dictionary containing the indices of weights at each layer that positively contributes to a specific class.
         This return value is mostly interesting for the package function get_learned_motif and can be safely ignored by
-        most users.
+        most users. Additionaly, the mean weights at each position are returned.
     """
 
     # load the trained CMKN model
-    model = torch.load(model_path)
-    model = model['state_dict']
+    model = torch.load(model_path, map_location=torch.device("cpu"))
+    model = model["state_dict"]
 
     # auxiliary variables used for propagating class association through the network
     aux_weights = {}
     aux_values = [{} for _ in range(num_classes)]
     aux_mean = np.zeros([num_classes, seq_len])
-    prev_layer = ''
+    prev_layer = ""
 
     # iterate over each layer
     for i, layer in enumerate(layers):
@@ -432,12 +478,12 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
         # class (i.e. that are connected with that class by a positive weight)
         if i == 0:
             # get the weights of the classification layer
-            aux_weights[layer] = model[layer + '.weight'].cpu()
+            aux_weights[layer] = model[layer + ".weight"].cpu()
 
             # get positive indices of positive weights for each class
             for j in range(num_classes):
                 aux_indices = aux_weights[layer][j, :] > 0
-                aux_indices = aux_indices.nonzero()
+                aux_indices = torch.nonzero(aux_indices)  # aux_indices.nonzero()
                 aux_values[j][layer] = aux_indices
 
             # store this layer's name to access the right indices at the next layer
@@ -446,7 +492,9 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
         # do the same for each neurons that belong to layers that are neither the classification layer nor the last
         # layer before the kernel layer
         elif i != len(layers) - 1:
-            raise NotImplementedError('Currently, the function get_weight_distribution only supports two layers.')
+            raise NotImplementedError(
+                "Currently, the function get_weight_distribution only supports two layers."
+            )
             # TODO: implement propagation of class association through each layer if there are more than two
 
             # store this layer's name to access the right indices at the next layer
@@ -461,13 +509,20 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
                 for idx in aux_values[j][prev_layer]:
 
                     # get the weights for the current index
-                    current_weights = model[layer + '.weight'][idx.item(), :].view(-1, seq_len).cpu().numpy()
+                    current_weights = (
+                        model[layer + ".weight"][idx.item(), :]
+                        .view(-1, seq_len)
+                        .cpu()
+                        .numpy()
+                    )
 
                     # iterate over sequence length and calculate mean weight at each position
                     for k in range(seq_len):
                         idx_positives = current_weights[:, k] > 0
-                        aux_mean[j, k] += (np.mean(current_weights[idx_positives, k]) *
-                                           aux_weights[prev_layer][j, idx.item()])
+                        aux_mean[j, k] += (
+                            np.mean(current_weights[idx_positives, k])
+                            * aux_weights[prev_layer][j, idx.item()]
+                        )
 
                 # divide sum of weights by number of weights
                 aux_mean[j, :] /= len(aux_values[j][prev_layer])
@@ -485,11 +540,11 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
             for j in range(seq_len):
 
                 # skip position if the selected window size does not fit
-                if j < win_len/2 or j > seq_len - (win_len/2 + 1):
+                if j < win_len / 2 or j > seq_len - (win_len / 2 + 1):
                     continue
 
                 # calculate mean and std of the current window
-                window = aux_mean[i, j - int(win_len/2):j + int(win_len/2)]
+                window = aux_mean[i, j - int(win_len / 2) : j + int(win_len / 2)]
                 mean_window = np.mean(window)
                 std_window = np.std(window)
 
@@ -503,12 +558,24 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
         # mirrored on the x-axis.
         if num_classes == 2:
             plt.figure()
-            plt.plot(aux_mean[1, :], 'r')
-            plt.plot(aux_mean[0, :] * -1, 'b')
+            plt.plot(aux_mean[1, :], "r")
+            plt.plot(aux_mean[0, :] * -1, "b")
             if viz_peaks:
-                plt.scatter(peaks[1], [aux_mean[1, p] for p in peaks[1]], c='r', s=60, marker=(5, 2))
-                plt.scatter(peaks[0], [aux_mean[0, p] * -1 for p in peaks[0]], c='b', s=60, marker=(5, 2))
-            plt.title('Mean Weight Distribution')
+                plt.scatter(
+                    peaks[1],
+                    [aux_mean[1, p] for p in peaks[1]],
+                    c="r",
+                    s=60,
+                    marker=(5, 2),
+                )
+                plt.scatter(
+                    peaks[0],
+                    [aux_mean[0, p] * -1 for p in peaks[0]],
+                    c="b",
+                    s=60,
+                    marker=(5, 2),
+                )
+            plt.title("Mean Weight Distribution")
             plt.show()
 
         # if there are more than two classes, plot weight distribution for each class in a separate plot
@@ -517,9 +584,15 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
             for i in range(num_classes):
                 axs[i].plot(aux_mean[i, :])
                 if viz_peaks:
-                    axs[i].scatter(peaks[i], [aux_mean[i, p] for p in peaks[i]], c='r', s=60, marker=(5, 2))
-                axs[i].set_title('Class: {}'.format(i))
-            plt.title('Mean Weight Distribution')
+                    axs[i].scatter(
+                        peaks[i],
+                        [aux_mean[i, p] for p in peaks[i]],
+                        c="r",
+                        s=60,
+                        marker=(5, 2),
+                    )
+                axs[i].set_title("Class: {}".format(i))
+            plt.title("Mean Weight Distribution")
             plt.show()
 
     except ImportError:
@@ -530,10 +603,12 @@ def get_weight_distribution(model_path, num_classes, seq_len, layers, viz_peaks=
         print(e)
 
     # return the weights of each motif at each sequence position
-    return aux_values
+    return aux_values, aux_mean
 
 
-def get_learned_motif(model_path, positions, num_classes, seq_len, layers, thld=None, viz=True, eps=1e-4):
+def get_learned_motif(
+    model_path, positions, num_classes, seq_len, layers, thld=None, viz=True, eps=1e-4
+):
     """Compute learned motif at specified sequence positions
 
     This function takes a trained CMKN model and a set of sequence positions and calculates the learned motif at the s
@@ -572,17 +647,21 @@ def get_learned_motif(model_path, positions, num_classes, seq_len, layers, thld=
         thld = None
 
     # load the trained CMKN model
-    model = torch.load(model_path)
-    args = model['args']
-    model = model['state_dict']
+    model = torch.load(model_path, map_location=torch.device("cpu"))
+    args = model["args"]
+    model = model["state_dict"]
 
     # get the indices indicating which weights belong to which class
-    aux_indices = get_weight_distribution(model_path, num_classes, seq_len, layers[:-1], False)
+    aux_indices, _ = get_weight_distribution(
+        model_path, num_classes, seq_len, layers[:-1], False
+    )
 
     # initiate tensor to hold the mean motif at each position
     aux_learned_motifs = {}
     for i in range(num_classes):
-        aux_learned_motifs[i] = torch.zeros(len(positions), len(args.alphabet), args.kmer_size)
+        aux_learned_motifs[i] = torch.zeros(
+            len(positions), len(args.alphabet), args.kmer_size
+        )
 
     # iterate over all specified positions
     for i, pos in enumerate(positions):
@@ -598,44 +677,73 @@ def get_learned_motif(model_path, positions, num_classes, seq_len, layers, thld=
             for idx in aux_indices[j][layers[-3]]:
 
                 # get the weights of the last layer before the kernel layer
-                aux_weights = model[layers[-2] + '.weight'][idx.item(), :].view(-1, seq_len).cpu()
+                aux_weights = (
+                    model[layers[-2] + ".weight"][idx.item(), :].view(-1, seq_len).cpu()
+                )
 
                 # if no threshold was set by the user, include all anchors with a weight 2x STD over the mean value
                 if thld is None:
                     aux_pos_weights = aux_weights[:, pos] > 0
-                    aux_std_mean = torch.std_mean(aux_weights[aux_pos_weights, pos], dim=0, unbiased=True)
+                    aux_std_mean = torch.std_mean(
+                        aux_weights[aux_pos_weights, pos], dim=0, unbiased=True
+                    )
                     threshold = aux_std_mean[1].item() + 2 * aux_std_mean[0].item()
 
                 # store each contributing anchor and the corresponding weight of that anchor
                 valid_anchors = aux_weights[:, pos] >= threshold
-                aux_anchors = torch.cat((aux_anchors, valid_anchors.nonzero().flatten()), 0)
-                aux_anchors_weights = torch.cat((aux_anchors_weights, aux_weights[valid_anchors, pos].flatten() *
-                                                 model[layers[-3] + '.weight'][j, idx.item()].cpu().item()), 0)
+                aux_anchors = torch.cat(
+                    (aux_anchors, torch.nonzero(valid_anchors).flatten()),
+                    0,  # valid_anchors.nonzero().flatten()), 0
+                )
+                aux_anchors_weights = torch.cat(
+                    (
+                        aux_anchors_weights,
+                        aux_weights[valid_anchors, pos].flatten()
+                        * model[layers[-3] + ".weight"][j, idx.item()].cpu().item(),
+                    ),
+                    0,
+                )
 
             # get the learned motif at the i-th position for the j-th class
             if len(aux_anchors) > 0:
-                aux_motif = torch.mean(model[layers[-1] + '.weight'][aux_anchors.type(torch.long), :, :].cpu() *
-                                       aux_anchors_weights.reshape(-1, 1, 1), dim=0)
+                aux_motif = torch.mean(
+                    model[layers[-1] + ".weight"][
+                        aux_anchors.type(torch.long), :, :
+                    ].cpu()
+                    * aux_anchors_weights.reshape(-1, 1, 1),
+                    dim=0,
+                )
                 aux_learned_motifs[j][i, :, :] = aux_motif
             else:
-                print('No learned motif at position {} for class {}'.format(i+1, j))
+                print("No learned motif at position {} for class {}".format(i + 1, j))
 
     if viz:
         # select the correct type of alphabet
         if len(args.alphabet) > 5:
-            alphabet = 'PROTEIN_FULL'
+            alphabet = "PROTEIN_FULL"
         else:
-            alphabet = 'DNA_FULL'
+            alphabet = "DNA_FULL"
 
         # display learned motif for each position and each class
         for i, pos in enumerate(positions):
             for j in range(num_classes):
                 # convert motifs into position weight matrices using a simple background model that assumes equal
                 # propability of each symbol
-                pwm_motifs = torch.log2(aux_learned_motifs[j][i, :, :].view(1, len(args.alphabet), args.kmer_size) /
-                                        (1/len(args.alphabet))) * -1
+                pwm_motifs = (
+                    torch.log2(
+                        aux_learned_motifs[j][i, :, :].view(
+                            1, len(args.alphabet), args.kmer_size
+                        )
+                        / (1 / len(args.alphabet))
+                    )
+                    * -1
+                )
 
-                print('displaying learned motif for class {} at position {}...'.format(j, pos + 1))
+                print(
+                    "displaying learned motif for class {} at position {}...".format(
+                        j, pos + 1
+                    )
+                )
                 anchors_to_motifs(pwm_motifs, alphabet, eps=eps)
 
     return aux_learned_motifs
@@ -665,6 +773,7 @@ def visualize_kernel_activation(model, kernel_layer, sequence):
     def get_activation(l_name):
         def hook(module, input, output):
             activations[l_name] = output.detach()
+
         return hook
 
     # make sure the kernel layer's name is a list
@@ -673,7 +782,9 @@ def visualize_kernel_activation(model, kernel_layer, sequence):
     elif isinstance(kernel_layer, str):
         layers = [kernel_layer]
     else:
-        raise ValueError('Argument kernel_layer has unsupported type: {}'.format(type(kernel_layer)))
+        raise ValueError(
+            "Argument kernel_layer has unsupported type: {}".format(type(kernel_layer))
+        )
 
     # iterate through the layers in the model and register hook for each specified layer
     for name, layer in model.named_modules():
@@ -691,7 +802,7 @@ def visualize_kernel_activation(model, kernel_layer, sequence):
         for i in range(nb_seq):
             for j in layers:
                 plt.figure()
-                plt.title('Activation of {} for sequence {}'.format(j, i))
+                plt.title("Activation of {} for sequence {}".format(j, i))
                 plt.imshow(activations[j].numpy()[i, :, :])
 
         # show the activation plots

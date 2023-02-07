@@ -3,7 +3,13 @@
 Implementation of the Convolutional Motif Kernel Network (CMKN). This method allows to build neural network models that
 incorporate learning within the reproducing kernel Hilbert space (RKHS) of the position-aware motif kernel into simple 
 end-to-end learning. This approach results in artificial neural networks that can robustly learn on small datasets and 
-are inherently interpretable. 
+are inherently interpretable.
+
+## Content
+- `cmkn/`: CMKN's source code
+- `docs/`: CMKN's documentation
+- `scripts/`: Scripts to perform experiments and analysis
+- `data/`: Preprocessing scripts for the datasets used in the experiments shown in the corresponding paper  
 
 ## Installation
 
