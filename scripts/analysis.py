@@ -3,7 +3,39 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 
-from cmkn import get_weight_distribution
+from cmkn import get_learned_motif, get_weight_distribution
+
+# MACROS
+COLORS = [
+    "black", 
+    "blue",
+    "yellow",
+    "green",
+    "red",
+    "brown",
+    "cyan",
+    "darkblue",
+    "darkorange",
+    "limegreen",
+    "steelblue",
+    "darkgrey",
+    "salmon",
+    "deeppink",
+    "lawngreen",
+    "orange",
+    "yellowgreen",
+    "cornflowerblue",
+    "darkkhaki",
+    "darkred",
+    "darkgreen",
+    "turquoise",
+    "darkviolet",
+    "beige",
+    "crimson",
+    "silver",
+    "gold",
+    "forestgreen",
+]
 
 
 def load_args():
@@ -25,7 +57,7 @@ def load_args():
         "--type",
         dest="type",
         default="robustness_pos",
-        choice=["robustness_pos"],
+        choices=["robustness_pos", "robustness_motif"],
         help="Select the analysis that should be performed",
     )
     parser.add_argument(
@@ -115,9 +147,35 @@ def load_args():
 
     # store the file name
     #   -> ATTENTION: Please change the filename appropriatly
-    args.filename = "CON_result_epochs200_fold{}.pkl"
+    args.filename = "CON_results_epochs200_fold{}.pkl"
 
     return args
+
+
+def set_box_color(bp, colors, lw=2.5, facecolor=True):
+    """Auxiliary function to set colors in a box plot
+    """
+    for i, c in enumerate(colors):
+        if c == "darkorange" and facecolor:
+            plt.setp(
+                bp["boxes"][i], facecolor="orange", edgecolor=c, linewidth=lw
+            )
+        elif c == "darkblue" and facecolor:
+            plt.setp(
+                bp["boxes"][i], facecolor="steelblue", edgecolor=c, linewidth=lw
+            )
+        elif not facecolor:
+            try:
+                plt.setp(
+                    bp["boxes"][i], color=c, linewidth=lw
+                )
+            except AttributeError as err:
+                print(f"AttributeError: {err}")
+        plt.setp(bp["medians"][i], color="firebrick", linewidth=lw)
+        plt.setp(bp["whiskers"][i * 2], color=c, linewidth=lw)
+        plt.setp(bp["whiskers"][i * 2 + 1], color=c, linewidth=lw)
+        plt.setp(bp["caps"][i * 2], color=c, linewidth=lw)
+        plt.setp(bp["caps"][i * 2 + 1], color=c, linewidth=lw)
 
 
 def robustness_pos(args):
@@ -135,32 +193,140 @@ def robustness_pos(args):
         )
         weights.append(aux_weights)
 
+    # get the weights at requested positions
+    weights_positive = []
+    weights_negative = []
+    for i, pos in enumerate(args.pos):
+        weights_positive.append([])
+        weights_negative.append([])
+        for j in range(args.folds):
+            weights_positive[i].append(weights[j][1, pos])
+            weights_negative[i].append(weights[j][0, pos])
+
     # plot derivation of weights over folds as boxplot
     plt.figure()
-    for i, pos in enumerate(args.pos):
-        weights_positive = []
-        weights_negative = []
-        for j in range(args.folds):
-            weights_positive.append(aux_weights[j][1, pos])
-            weights_negative.append(aux_weights[j][0, pos])
+    plt.title(args.data)
 
-        plt.boxplot(
-            np.array(weights_positive),
-            positions=2 * i - 0.4,
-            sym="",
-            widths=0.6,
-            c="r",
-        )
+    bp_pos = plt.boxplot(
+        [np.array(i) for i in weights_positive],
+        positions=np.arange(len(args.pos)) * 2 - 0.4,
+        sym="",
+        widths=0.6,
+        patch_artist=True,
+    )
+    set_box_color(bp_pos, ["darkorange"] * len(args.pos))
 
-        plt.boxplot(
-            np.array(weights_negative),
-            positions=2 * i + 0.4,
-            sym="",
-            widths=0.6,
-            c="b",
-        )
+    bp_neg = plt.boxplot(
+        [np.array(i) for i in weights_negative],
+        positions=np.arange(len(args.pos)) * 2 + 0.4,
+        sym="",
+        widths=0.6,
+        patch_artist=True,
+    )
+    set_box_color(bp_neg, ["darkblue"] * len(args.pos))
+
+    plt.xticks(ticks=np.arange(len(args.pos)) * 2, labels=args.pos)
+    plt.ylim((0, 0.06))
 
     plt.show()
+
+
+def robustness_motif(args):
+    """Function to analyze the robustness of motifs.
+    """
+
+    # get the learned motifs for each fold
+    motifs = []
+    alphabet_size = 0
+    for i in range(args.folds):
+        aux_motifs = get_learned_motif(
+            model_path=args.filepath + args.filename.format(i),
+            positions=args.pos,
+            num_classes=args.classes,
+            seq_len=args.seq_len,
+            layers=args.layers,
+            viz=False,
+        )
+        motifs.append(aux_motifs)
+        alphabet_size = aux_motifs[0].shape[1]
+
+    # rearrange the learned motif contribution for plotting
+    motif_res = []
+    motif_sus = []
+    for i, _ in enumerate(args.pos):
+        motif_res.append([])
+        motif_sus.append([])
+        for j in range(alphabet_size):
+            motif_res.append([])
+            motif_sus.append([])
+
+            for k in range(args.folds):
+                motif_res[-1].append(motifs[k][1][i, j].item())
+                motif_sus[-1].append(motifs[k][0][i, j].item())
+
+    # plot the results
+    summary = False
+    if summary:
+        plt.figure()
+        plt.title(args.data)
+        bp_res = plt.boxplot(
+            motif_res,
+            flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
+        )
+        set_box_color(bp_res, colors=COLORS[:alphabet_size+1] * len(args.pos), lw=1, facecolor=False)
+        plt.xticks(
+            ticks=[i*alphabet_size + (alphabet_size/2) for i in range(len(args.pos))], 
+            labels=args.pos
+        )
+        plt.ylim((0,0.1))
+        plt.show()
+
+        plt.figure()
+        plt.title(args.data)
+        bp_sus = plt.boxplot(
+            motif_sus,
+            flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
+        )
+        set_box_color(bp_sus, colors=COLORS[:alphabet_size+1] * len(args.pos), lw=1, facecolor=False)
+        plt.xticks(
+            ticks=[i*(alphabet_size+1) + (alphabet_size/2) for i in range(len(args.pos))], 
+            labels=args.pos
+        )
+        plt.ylim((0,0.1))
+        plt.show()
+
+        plt.figure()
+        plt.bar(
+            x = np.arange(alphabet_size),
+            height = [1] * alphabet_size,
+            color = COLORS[1:alphabet_size+1],
+            tick_label = [
+                "A", "R", "N", "D", "C", "Q", "E", "G", 
+                "H", "I", "L", "K", "M", "F", "P", "S", 
+                "T", "W", "Y", "V", "X", "B", "Z", "J", 
+                "U", "O"
+            ],
+        )
+        plt.show()
+
+    else:
+        lims = [.0175, .055, .02, .035, .012, .0175, 0.03, 0.03, 0.055, .025]
+        for i in range(len(args.pos)):
+            fig, axs = plt.subplots(1,2)
+            bp_res = axs[0].boxplot(
+                motif_res[i*(alphabet_size+1) : (i+1)*(alphabet_size+1)],
+                flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
+            )
+            bp_sus = axs[1].boxplot(
+                motif_sus[i*(alphabet_size+1) : (i+1)*(alphabet_size+1)],
+                flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
+            )
+            set_box_color(bp_res, colors=COLORS[:alphabet_size+1], lw=1, facecolor=False)
+            set_box_color(bp_sus, colors=COLORS[:alphabet_size+1], lw=1, facecolor=False)
+            axs[0].set_ylim(0, lims[i])
+            axs[1].set_ylim(0, lims[i])
+            plt.title(str(args.pos[i]))
+            plt.show()
 
 
 def main():
@@ -173,6 +339,8 @@ def main():
     # perfom the requested analysis
     if args.type == "robustness_pos":
         robustness_pos(args)
+    elif args.type == "robustness_motif":
+        robustness_motif(args)
 
 
 if __name__ == "__main__":
