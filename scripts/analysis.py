@@ -2,12 +2,14 @@ import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import torch
 
 from cmkn import get_learned_motif, get_weight_distribution
 
 # MACROS
 COLORS = [
-    "black", 
+    "black",
     "blue",
     "yellow",
     "green",
@@ -57,7 +59,6 @@ def load_args():
         "--type",
         dest="type",
         default="robustness_pos",
-        choices=["robustness_pos", "robustness_motif"],
         help="Select the analysis that should be performed",
     )
     parser.add_argument(
@@ -128,6 +129,9 @@ def load_args():
         args.data = args.data.split("_")[1]
         args.data_type = "DGSPLICER"
         args.seq_len = 18
+    elif args.data == "synthetic":
+        args.data_type = "synthetic"
+        args.seq_len = 100
     else:
         raise ValueError(f"Unknown dataset selected: {args.data}")
 
@@ -147,7 +151,7 @@ def load_args():
 
     # store the file name
     #   -> ATTENTION: Please change the filename appropriatly
-    args.filename = "CON_results_epochs200_fold{}.pkl"
+    args.filename = "CMKN_results_fold{}.pkl"
 
     return args
 
@@ -157,18 +161,12 @@ def set_box_color(bp, colors, lw=2.5, facecolor=True):
     """
     for i, c in enumerate(colors):
         if c == "darkorange" and facecolor:
-            plt.setp(
-                bp["boxes"][i], facecolor="orange", edgecolor=c, linewidth=lw
-            )
+            plt.setp(bp["boxes"][i], facecolor="orange", edgecolor=c, linewidth=lw)
         elif c == "darkblue" and facecolor:
-            plt.setp(
-                bp["boxes"][i], facecolor="steelblue", edgecolor=c, linewidth=lw
-            )
+            plt.setp(bp["boxes"][i], facecolor="steelblue", edgecolor=c, linewidth=lw)
         elif not facecolor:
             try:
-                plt.setp(
-                    bp["boxes"][i], color=c, linewidth=lw
-                )
+                plt.setp(bp["boxes"][i], color=c, linewidth=lw)
             except AttributeError as err:
                 print(f"AttributeError: {err}")
         plt.setp(bp["medians"][i], color="firebrick", linewidth=lw)
@@ -270,63 +268,140 @@ def robustness_motif(args):
         plt.figure()
         plt.title(args.data)
         bp_res = plt.boxplot(
-            motif_res,
-            flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
+            motif_res, flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
         )
-        set_box_color(bp_res, colors=COLORS[:alphabet_size+1] * len(args.pos), lw=1, facecolor=False)
+        set_box_color(
+            bp_res,
+            colors=COLORS[: alphabet_size + 1] * len(args.pos),
+            lw=1,
+            facecolor=False,
+        )
         plt.xticks(
-            ticks=[i*alphabet_size + (alphabet_size/2) for i in range(len(args.pos))], 
-            labels=args.pos
+            ticks=[
+                i * alphabet_size + (alphabet_size / 2) for i in range(len(args.pos))
+            ],
+            labels=args.pos,
         )
-        plt.ylim((0,0.1))
+        plt.ylim((0, 0.1))
         plt.show()
 
         plt.figure()
         plt.title(args.data)
         bp_sus = plt.boxplot(
-            motif_sus,
-            flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
+            motif_sus, flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
         )
-        set_box_color(bp_sus, colors=COLORS[:alphabet_size+1] * len(args.pos), lw=1, facecolor=False)
+        set_box_color(
+            bp_sus,
+            colors=COLORS[: alphabet_size + 1] * len(args.pos),
+            lw=1,
+            facecolor=False,
+        )
         plt.xticks(
-            ticks=[i*(alphabet_size+1) + (alphabet_size/2) for i in range(len(args.pos))], 
-            labels=args.pos
+            ticks=[
+                i * (alphabet_size + 1) + (alphabet_size / 2)
+                for i in range(len(args.pos))
+            ],
+            labels=args.pos,
         )
-        plt.ylim((0,0.1))
+        plt.ylim((0, 0.1))
         plt.show()
 
         plt.figure()
         plt.bar(
-            x = np.arange(alphabet_size),
-            height = [1] * alphabet_size,
-            color = COLORS[1:alphabet_size+1],
-            tick_label = [
-                "A", "R", "N", "D", "C", "Q", "E", "G", 
-                "H", "I", "L", "K", "M", "F", "P", "S", 
-                "T", "W", "Y", "V", "X", "B", "Z", "J", 
-                "U", "O"
+            x=np.arange(alphabet_size),
+            height=[1] * alphabet_size,
+            color=COLORS[1 : alphabet_size + 1],
+            tick_label=[
+                "A",
+                "R",
+                "N",
+                "D",
+                "C",
+                "Q",
+                "E",
+                "G",
+                "H",
+                "I",
+                "L",
+                "K",
+                "M",
+                "F",
+                "P",
+                "S",
+                "T",
+                "W",
+                "Y",
+                "V",
+                "X",
+                "B",
+                "Z",
+                "J",
+                "U",
+                "O",
             ],
         )
         plt.show()
 
     else:
-        lims = [.0175, .055, .02, .035, .012, .0175, 0.03, 0.03, 0.055, .025]
+        lims = [0.0175, 0.055, 0.02, 0.035, 0.012, 0.0175, 0.03, 0.03, 0.055, 0.025]
         for i in range(len(args.pos)):
-            fig, axs = plt.subplots(1,2)
+            fig, axs = plt.subplots(1, 2)
             bp_res = axs[0].boxplot(
-                motif_res[i*(alphabet_size+1) : (i+1)*(alphabet_size+1)],
+                motif_res[i * (alphabet_size + 1) : (i + 1) * (alphabet_size + 1)],
                 flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
             )
             bp_sus = axs[1].boxplot(
-                motif_sus[i*(alphabet_size+1) : (i+1)*(alphabet_size+1)],
+                motif_sus[i * (alphabet_size + 1) : (i + 1) * (alphabet_size + 1)],
                 flierprops=dict(markerfacecolor="k", marker="D", markersize=1),
             )
-            set_box_color(bp_res, colors=COLORS[:alphabet_size+1], lw=1, facecolor=False)
-            set_box_color(bp_sus, colors=COLORS[:alphabet_size+1], lw=1, facecolor=False)
+            set_box_color(
+                bp_res, colors=COLORS[: alphabet_size + 1], lw=1, facecolor=False
+            )
+            set_box_color(
+                bp_sus, colors=COLORS[: alphabet_size + 1], lw=1, facecolor=False
+            )
             axs[0].set_ylim(0, lims[i])
             axs[1].set_ylim(0, lims[i])
             plt.title(str(args.pos[i]))
             plt.show()
+
+
+def cv_performance(args):
+    """Function to assess the cross-validation performance of a model.
+    """
+    results = []
+    for i in range(args.folds):
+
+        # load the dictionary containing the validation performance
+        res_dict = torch.load(args.filepath + args.filename.format(i))
+        val_perf = res_dict["val_performance"]
+
+        # transform dictionary into pandas dataframe
+        val_perf = pd.DataFrame.from_dict(val_perf)
+        results.append(val_perf)
+
+    # concatenate results of all folds
+    df_res = pd.concat(results, axis=1)
+    df_res["mean"] = df_res.mean(axis=1)
+    df_res["std"] = df_res[:-1].std(axis=1)
+
+    # print results
+    print("===============================")
+    print(f"Results for {args.data}")
+    print("===============================\n")
+
+    print("Parameters:")
+    print(f"    motif length  : {args.modelargs[1]}")
+    print(f"    sigma         : {args.modelargs[2]}")
+    print(f"    beta (kernel) : {args.modelargs[3]}")
+    print(f"    alpha (kernel): {args.modelargs[4]}")
+    print(f"    anchors       : {args.modelargs[5]}")
+    print(f"    layers        : {args.modelargs[6]}\n")
+
+    with pd.option_context(
+        "display.max_rows", None, "display.max_columns", None, "display.width", None,
+    ):
+        print(df_res)
 
 
 def main():
@@ -341,6 +416,8 @@ def main():
         robustness_pos(args)
     elif args.type == "robustness_motif":
         robustness_motif(args)
+    elif args.type == "cvperformance":
+        cv_performance(args)
 
 
 if __name__ == "__main__":
