@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from cmkn import get_learned_motif, get_weight_distribution
+from cmkn import anchors_to_motifs, get_learned_motif, get_weight_distribution
+from cmkn.data_utils import ALPHABETS
 
 # MACROS
 COLORS = [
@@ -97,6 +98,13 @@ def load_args():
         default=["classifier", "fc"],
         help="List with the names of the model's layers",
     )
+    parser.add_argument(
+        "--eval-area",
+        dest="eval_area",
+        action="store_true",
+        default=False,
+        help="This flag indicates whether the area surrounding the selected positions will be analyzed.",
+    )
 
     args = parser.parse_args()
 
@@ -105,33 +113,41 @@ def load_args():
         args.data_type = "HIV"
         args.drug_type = "PI"
         args.seq_len = 99
+        args.alphabet = ALPHABETS["PROTEIN_FULL"][0]
     elif args.data in ["3TC", "ABC", "AZT", "D4T", "DDI", "TDF"]:
         args.data_type = "HIV"
         args.drug_type = "NRTI"
         args.seq_len = 240
+        args.alphabet = ALPHABETS["PROTEIN_FULL"][0]
     elif args.data in ["EFV", "NVP", "ETR", "RPV"]:
         args.data_type = "HIV"
         args.drug_type = "NNRTI"
         args.seq_len = 240
+        args.alphabet = ALPHABETS["PROTEIN_FULL"][0]
     elif args.data == "NN269_acceptor":
         args.data = args.data.split("_")[1]
         args.data_type = "NN269"
         args.seq_len = 90
+        args.alphabet = ALPHABETS["DNA_FULL"][0]
     elif args.data == "NN269_donor":
         args.data = args.data.split("_")[1]
         args.data_type = "NN269"
         args.seq_len = 15
+        args.alphabet = ALPHABETS["DNA_FULL"][0]
     elif args.data == "DGSPLICER_acceptor":
         args.data = args.data.split("_")[1]
         args.data_type = "DGSPLICER"
         args.seq_len = 36
+        args.alphabet = ALPHABETS["DNA_FULL"][0]
     elif args.data == "DGSPLICER_donor":
         args.data = args.data.split("_")[1]
         args.data_type = "DGSPLICER"
         args.seq_len = 18
+        args.alphabet = ALPHABETS["DNA_FULL"][0]
     elif args.data == "synthetic":
         args.data_type = "synthetic"
         args.seq_len = 100
+        args.alphabet = ALPHABETS["DNA"][0]
     else:
         raise ValueError(f"Unknown dataset selected: {args.data}")
 
@@ -151,7 +167,10 @@ def load_args():
 
     # store the file name
     #   -> ATTENTION: Please change the filename appropriatly
-    args.filename = "CMKN_results_fold{}.pkl"
+    if args.type in ["analyze_weights", "analyze_motifs"]:
+        args.filename = "CMKN_results.pkl"
+    else:
+        args.filename = "CMKN_results_fold{}.pkl"
 
     return args
 
@@ -404,6 +423,88 @@ def cv_performance(args):
         print(df_res)
 
 
+def analyze_weights(args):
+    """Analyze the learned weights of a trained CMKN model.
+    """
+
+    # get the learned weights for each position
+    _, learned_weights = get_weight_distribution(
+        model_path=args.filepath + args.filename,
+        num_classes=args.classes,
+        seq_len=args.seq_len,
+        layers=args.layers,
+    )
+
+    # get the mean weights for each class
+    mean_weight_negative = np.mean(learned_weights[0, :])
+    mean_weight_positive = np.mean(learned_weights[1, :])
+
+    # make sure to remove negative importance
+    print_negative = learned_weights[0, :] - mean_weight_negative
+    print_negative[print_negative < 0] = 0
+    print_positive = learned_weights[1, :] - mean_weight_positive
+    print_positive[print_positive < 0] = 0
+
+    # plot weight as bar
+    fig, axs = plt.subplots(2, 1, sharey=True)
+    axs[0].bar(np.arange(100), print_negative, color="royalblue")
+    axs[1].bar(np.arange(100), print_positive, color="firebrick")
+    plt.show()
+
+
+def analyze_motif(args):
+    """Function to analyze learned motifs.
+    """
+
+    # look at the area surrounding the positions
+    motif_len = int(args.modelargs[1])
+    if args.eval_area:
+        positions = []
+        for pos in args.pos:
+            positions = positions + list(range(pos - motif_len, pos))
+    else:
+        positions = args.pos
+
+    # get the motifs
+    aux_motifs = get_learned_motif(
+        model_path=args.filepath + args.filename,
+        positions=positions,
+        num_classes=args.classes,
+        seq_len=args.seq_len,
+        layers=args.layers,
+        viz=False,
+    )
+
+    print("displaying negative motifs...")
+    anchors_to_motifs(aux_motifs[0])
+    print("displaying positive motifs...")
+    anchors_to_motifs(aux_motifs[1])
+
+    if args.eval_area:
+        # create the investigated sequence area
+        motif_negative = np.zeros(
+            (len(args.pos), len(args.alphabet), motif_len * 2 - 1)
+        )
+        motif_positive = np.zeros(
+            (len(args.pos), len(args.alphabet), motif_len * 2 - 1)
+        )
+
+        # iterate over the learned motifs and update the investigated sequence area
+        for i in range(len(args.pos)):
+            for j in range(motif_len):
+                motif_negative[i, :, j : j + motif_len] = (
+                    motif_negative[i, :, j : j + motif_len]
+                    + aux_motifs[0][motif_len * i + j, :, :].numpy()
+                )
+                motif_positive[i, :, j : j + motif_len] = (
+                    motif_positive[i, :, j : j + motif_len]
+                    + aux_motifs[1][motif_len * i + j, :, :].numpy()
+                )
+
+        anchors_to_motifs(torch.tensor(motif_negative))
+        anchors_to_motifs(torch.tensor(motif_positive))
+
+
 def main():
     """Main function of the analysis script.
     """
@@ -418,6 +519,10 @@ def main():
         robustness_motif(args)
     elif args.type == "cvperformance":
         cv_performance(args)
+    elif args.type == "analyze_weights":
+        analyze_weights(args)
+    elif args.type == "analyze_motifs":
+        analyze_motif(args)
 
 
 if __name__ == "__main__":

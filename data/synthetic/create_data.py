@@ -3,6 +3,10 @@ import pickle
 import random
 import time
 
+import numpy as np
+from Bio import SeqIO
+from sklearn.model_selection import StratifiedKFold
+
 
 def load_args():
     parser = argparse.ArgumentParser(
@@ -14,6 +18,14 @@ def load_args():
         default=42,
         type=int,
         help="Set the random seed for the creation of the dataset.",
+    )
+    parser.add_argument(
+        "--type",
+        dest="type",
+        default="data",
+        type=str,
+        choices=["data", "folds"],
+        help="Select which function should be called. 'data' creates a synthetic dataset and 'folds' creates stratified folds for an existing dataset",
     )
     parser.add_argument(
         "--outdir",
@@ -83,6 +95,20 @@ def load_args():
         default="TGAGT",
         type=str,
         help="Motif embedded into negative sequences.",
+    )
+    parser.add_argument(
+        "--dataset",
+        dest="path_to_dataset",
+        default="default.fasta",
+        type=str,
+        help="Dataset for which the folds should be created. Currently, the function is implemented for fasta files. Only used if --type is set to 'folds'.",
+    )
+    parser.add_argument(
+        "--kfold",
+        dest="kfold",
+        default=5,
+        type=int,
+        help="Number of stratified folds created. Only used if --type is set to 'folds'.",
     )
 
     args = parser.parse_args()
@@ -182,9 +208,46 @@ def create_synthetic_data(args):
         pickle.dump(args, out_file)
 
 
+def create_folds(args):
+    """Function to create stratified cross-validation folds for an existing dataset. This is
+    needed to train different methods on the dataset using the exact same folds.
+    """
+
+    # initalize sklearn's StratifiedKFold object
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=1)
+
+    # parse the dataset
+    tmp = list(SeqIO.parse(args.path_to_dataset, "fasta"))
+    # get the sequences and labels
+    seq = [i.seq for i in tmp]
+    label = [int(i.id.split("_")[-1]) for i in tmp]
+
+    # create np.array objects for the creation of stratified fold indices
+    vec_indices = np.arange(len(seq))
+    vec_label = np.array(label)
+
+    # get train and validation indices for each fold
+    aux_folds = []
+    for _, split_idx in enumerate(skf.split(vec_indices, vec_label)):
+        aux_folds.append((vec_indices[split_idx[0]], vec_indices[split_idx[1]]))
+
+    # create the name of the folds file
+    filename = args.path_to_dataset.split("/")[-1]
+    filename = filename.split(".")[0]
+    filename = filename + "_folds.pkl"
+
+    # store the folds
+    with open(args.outdir + filename, "wb") as out_file:
+        pickle.dump(aux_folds, out_file, pickle.HIGHEST_PROTOCOL)
+
+
 def main():
     args = load_args()
-    create_synthetic_data(args)
+
+    if args.type == "data":
+        create_synthetic_data(args)
+    elif args.type == "folds":
+        create_folds(args)
 
 
 if __name__ == "__main__":

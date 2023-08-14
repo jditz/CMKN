@@ -690,6 +690,14 @@ def train_splice(args):
         alphabet="DNA_FULL",
         experiment="splice",
     )
+    data_test = CustomHandler(
+        args.filepath.format("test"),
+        kmer_size=args.kmer_size,
+        clean_set=False,
+        encode="onehot",
+        alphabet="DNA_FULL",
+        experiment="splice",
+    )
 
     # get labels of each entry for stratified shuffling and distribution of classes for class balance loss
     args.class_count, args.expected_loss, label_vec = count_classes_splice(
@@ -708,10 +716,119 @@ def train_splice(args):
 
     # perform n-fold stratified cross-validation using scikit-learn
     #   -> n can be set with the command line argument '--kfold n'
-    indices = np.arange(len(data_all))
-    skf = StratifiedKFold(n_splits=args.kfold, shuffle=True, random_state=args.seed)
-    for fold_nb, split_idx in enumerate(skf.split(indices, label_vec)):
+    if args.kfold > 1:
+        indices = np.arange(len(data_all))
+        skf = StratifiedKFold(n_splits=args.kfold, shuffle=True, random_state=args.seed)
+        for fold_nb, split_idx in enumerate(skf.split(indices, label_vec)):
 
+            # initialize the CMKN model
+            model = CMKN(
+                in_channels=len(args.alphabet),
+                out_channels_list=args.out_channels,
+                filter_sizes=args.kernel_sizes,
+                strides=args.strides,
+                paddings=args.paddings,
+                num_classes=args.num_classes,
+                kernel_args=[args.sigma, args.scale, args.alpha],
+                scaler=args.preprocessor,
+                pool_global=None,
+            )
+
+            # under-sample the majority class in the training set for experiments with the DGSplicer dataset
+            #     1. create a mock input for the subsampling class
+            #     2. initialize the subsampler with a target ration of 0.25 (N_min / N_maj = 0.25)
+            #     3. retrieve the indices of the samples included in the new training dataset
+            #     4. update training indices and class counts
+            if args.type == "SPLICE_DGSPLICER":
+                mock_input = split_idx[0].reshape(-1, 1)
+                rus = RandomUnderSampler(
+                    sampling_strategy=0.25, random_state=args.seed, replacement=False
+                )
+                sub_train, _ = rus.fit_resample(mock_input, label_vec[split_idx[0]])
+                args.class_count = [
+                    int(len(sub_train) * 0.8),
+                    int(len(sub_train) * 0.2),
+                ]
+                split_idx = (sub_train.reshape(-1), split_idx[1])
+
+            # split dataset into training and validation samples
+            args.train_indices, args.val_indices = split_idx[0], split_idx[1]
+
+            # set arguments for the DataLoader
+            loader_args = {}
+            if args.use_cuda:
+                loader_args = {"num_workers": 1, "pin_memory": True}
+
+            # Creating PyTorch data Subsets using the indices for the current fold
+            data_train = Subset(data_all, args.train_indices)
+            data_val = Subset(data_all, args.val_indices)
+
+            # create PyTorch DataLoader for training and validation data
+            loader_train = DataLoader(
+                data_train, batch_size=args.batch_size, shuffle=False, **loader_args
+            )
+            loader_val = DataLoader(
+                data_val, batch_size=args.batch_size, shuffle=False, **loader_args
+            )
+
+            # initialize optimizer and loss function
+            if args.num_classes == 2:
+                criterion = ClassBalanceLoss(
+                    args.class_count,
+                    args.num_classes,
+                    "sigmoid",
+                    args.loss_beta,
+                    args.loss_gamma,
+                )
+            else:
+                criterion = ClassBalanceLoss(
+                    args.class_count,
+                    args.num_classes,
+                    "cross_entropy",
+                    args.loss_beta,
+                    args.loss_gamma,
+                )
+            optimizer = optim.Adam(model.parameters(), lr=0.1, weight_decay=1e-6)
+            lr_scheduler = ReduceLROnPlateau(
+                optimizer, factor=0.5, patience=4, min_lr=1e-4
+            )
+
+            # train model
+            if args.use_cuda:
+                model.cuda()
+            acc, loss = model.sup_train(
+                loader_train,
+                criterion,
+                optimizer,
+                lr_scheduler,
+                epochs=args.nb_epochs,
+                early_stop=False,
+                use_cuda=args.use_cuda,
+                kmeans_init="k-means++",
+                distance="euclidean",
+            )
+
+            # compute performance metrices on validation data
+            pred_y, true_y = model.predict(
+                loader_val, proba=True, use_cuda=args.use_cuda
+            )
+            scores = compute_metrics(true_y, pred_y)
+
+            # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
+            # model
+            torch.save(
+                {
+                    "args": args,
+                    "state_dict": model.state_dict(),
+                    "acc": acc,
+                    "loss": loss,
+                    "val_performance": scores.to_dict(),
+                },
+                args.outdir + "/CMKN_results_fold" + str(fold_nb) + ".pkl",
+            )
+
+    # train model on whole data for interpretation
+    else:
         # initialize the CMKN model
         model = CMKN(
             in_channels=len(args.alphabet),
@@ -730,33 +847,26 @@ def train_splice(args):
         #     2. initialize the subsampler with a target ration of 0.25 (N_min / N_maj = 0.25)
         #     3. retrieve the indices of the samples included in the new training dataset
         #     4. update training indices and class counts
-        if args.type == "SPLICE_DGSPLICER":
-            mock_input = split_idx[0].reshape(-1, 1)
-            rus = RandomUnderSampler(
-                sampling_strategy=0.25, random_state=args.seed, replacement=False
-            )
-            sub_train, _ = rus.fit_resample(mock_input, label_vec[split_idx[0]])
-            args.class_count = [int(len(sub_train) * 0.8), int(len(sub_train) * 0.2)]
-            split_idx = (sub_train.reshape(-1), split_idx[1])
-
-        # split dataset into training and validation samples
-        args.train_indices, args.val_indices = split_idx[0], split_idx[1]
+        # if args.type == "SPLICE_DGSPLICER":
+        #    mock_input = split_idx[0].reshape(-1, 1)
+        #    rus = RandomUnderSampler(
+        #        sampling_strategy=0.25, random_state=args.seed, replacement=False
+        #    )
+        #    sub_train, _ = rus.fit_resample(mock_input, label_vec[split_idx[0]])
+        #    args.class_count = [int(len(sub_train) * 0.8), int(len(sub_train) * 0.2)]
+        #    split_idx = (sub_train.reshape(-1), split_idx[1])
 
         # set arguments for the DataLoader
         loader_args = {}
         if args.use_cuda:
             loader_args = {"num_workers": 1, "pin_memory": True}
 
-        # Creating PyTorch data Subsets using the indices for the current fold
-        data_train = Subset(data_all, args.train_indices)
-        data_val = Subset(data_all, args.val_indices)
-
         # create PyTorch DataLoader for training and validation data
-        loader_train = DataLoader(
-            data_train, batch_size=args.batch_size, shuffle=False, **loader_args
+        loader = DataLoader(
+            data_all, batch_size=args.batch_size, shuffle=False, **loader_args
         )
-        loader_val = DataLoader(
-            data_val, batch_size=args.batch_size, shuffle=False, **loader_args
+        loader_test = DataLoader(
+            data_test, batch_size=args.batch_size, shuffle=False, **loader_args
         )
 
         # initialize optimizer and loss function
@@ -783,7 +893,7 @@ def train_splice(args):
         if args.use_cuda:
             model.cuda()
         acc, loss = model.sup_train(
-            loader_train,
+            loader,
             criterion,
             optimizer,
             lr_scheduler,
@@ -795,8 +905,8 @@ def train_splice(args):
         )
 
         # compute performance metrices on validation data
-        pred_y, true_y = model.predict(loader_val, proba=True, use_cuda=args.use_cuda)
-        scores = compute_metrics(true_y, pred_y)
+        # pred_y, true_y = model.predict(loader_test, proba=True, use_cuda=args.use_cuda)
+        # scores = compute_metrics(true_y, pred_y)
 
         # save the model's state_dict to be able to perform inference and other stuff without the need of retraining the
         # model
@@ -806,9 +916,9 @@ def train_splice(args):
                 "state_dict": model.state_dict(),
                 "acc": acc,
                 "loss": loss,
-                "val_performance": scores.to_dict(),
+                # "val_performance": scores.to_dict(),
             },
-            args.outdir + "/CMKN_results_fold" + str(fold_nb) + ".pkl",
+            args.outdir + "/CMKN_results.pkl",
         )
 
 

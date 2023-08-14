@@ -45,6 +45,10 @@ ALPHABETS = {
         'ACGTN',
         '\x01\x02\x03\x04' + '\x00'
     ),
+    'DNA_GAP': (
+        'ACGTN-',
+        '\x01\x02\x03\x04' + '\x00'*2
+    )
     'DNA_AMBI': (
         'N',
         '\x00'
@@ -57,6 +61,10 @@ ALPHABETS = {
         'ARNDCQEGHILKMFPSTWYVXBZJUO',
         '\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14' + '\x00'*6
     ),
+    'PROTEIN_GAP': (
+        'ARNDCQEGHILKMFPSTWYVXBZJUO-',
+        '\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14' + '\x00'*7
+    )
     'PROTEIN_AMBI': (
         'XBZJUO',
         '\x00' * 6
