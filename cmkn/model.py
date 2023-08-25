@@ -751,7 +751,7 @@ class PhyloCMKN(nn.Module):
         num_classes=1,
         **kwargs,
     ):
-        """Constructor of the CMKN class.
+        """Constructor of the PhyloCMKN class.
 
         Args:
             in_channels (:obj:`int`): Dimensionality of the alphabet that generates the input sequences.
@@ -786,7 +786,7 @@ class PhyloCMKN(nn.Module):
 
         # assert that every phylogeny sequence used for masking has the same
         # length as the input sequences
-        if any([len(i) != seq_len for i in mask_seq_dict.values()]):
+        if any([i.size(1) != seq_len for i in mask_seq_dict.values()]):
             raise ValueError(
                 "At least one of the sequences used for phylogeny mask "
                 "creation does not match the length of input sequences!"
@@ -836,27 +836,38 @@ class PhyloCMKN(nn.Module):
         """Function to access the normalization routine of the CMKNLayer"""
         self.cmkn_layer.normalize_()
 
-    def create_phylogeny_mask_(self, x_in, key):
-        """Create a phylogeny mask
+    def phylogeny_masking_(self, x_in, x_seq, keys):
+        """Perform phylogy masking
 
-        This function takes a key as input and returns the phylogeny mask that corresponds
-        to the sequence stored in self.phylo_masks. The mask will set all positions in the input
+        This function takes keys as input and create the phylogeny masks that corresponds
+        to the sequence stored in self.phylo_masks. The masks are used to set all positions in the input
         that are identical with the corresponding position in the mask sequence to zero, canceling
         out position that are expected to contain less valuable information.
 
         Args:
-            x_in (Tensor): Input sequence as a one-hot-encoded tensor.
-            keys (:obj:`str`): String that will be used to access values in self.phylo_masks.
+            x_in (Tensor): Batch of kernel activations, i.e. output of the motif kernel layer.
+            x_seq (Tensor): Batch of input sequences as a one-hot-encoded tensor.
+            keys (:obj:`list` of :obj:`str`): Batch of strings that will be used to access values in self.phylo_masks.
 
         Returns:
-            Phylogeny mask as a tensor created with the input sequence and the selected mask sequence.
+            The input with all positions that are identical to the selected phylogeny sequence set to zero
         """
+        out = torch.Tensor(x_in.size())
 
-        # create a boolean tensor of length self.seq_len that indicates for each position
-        # whether the input and mask sequence are identical at this position
-        return (
-            torch.eq(x_in, self.phylo_masks[key]).sum(dim=0).lt(self.seq_len).double()
-        )
+        for i, key in enumerate(keys):
+            # create a boolean tensor of length self.seq_len that indicates for each position
+            # whether the input and mask sequence are identical at this position
+            mask = (
+                torch.eq(x_seq[i, :], self.phylo_masks[key])
+                .sum(dim=0)
+                .lt(self.seq_len)
+                .double()
+            )
+
+            # apply phenoly mask to input
+            out[i, :] = torch.mul(x_in[i, :], mask)
+
+        return out
 
     def initialize_(
         self,
@@ -929,7 +940,7 @@ class PhyloCMKN(nn.Module):
 
         # get batches using the DataLoader object
         seq_len = None
-        for data, _ in data_loader:
+        for data, *_ in data_loader:
             # stop sampling oligomers if the maximum number of oligomers is already achieved
             if n_kmers >= n_sampling_motifs:
                 break
@@ -966,13 +977,13 @@ class PhyloCMKN(nn.Module):
             distance, motifs, seq_len, init=init, max_iters=max_iters
         )
 
-    def forward(self, x_in, key, proba=False):
+    def forward(self, x_in, keys, proba=False):
         """Overwritten forward function for CON objects
 
         Args:
             x_in (Tensor): Input to the model given as a Tensor of size (batch_size x self.in_channels x seq_len)
-            key (:obj:`str`): String that indicates which sequence from the phylogeny dictionary will be used
-                to calculate the phylogeny mask
+            keys (:obj:`list` of :obj:`str`): Strings that indicate which sequence from the phylogeny dictionary will be used
+                to calculate the phylogeny masks
             proba (:obj:`bool`): Indicates whether the network should produce probabilistic output
 
         Returns:
@@ -983,11 +994,10 @@ class PhyloCMKN(nn.Module):
         # pass activation through the motif kernel layer
         x_out = self.cmkn_layer(x_in)
 
-        # calculate the phylogeny mask
-        phylo_mask = self.create_phylogeny_mask_(x_in, key)
+        # perform phylogeny masking
+        x_out = self.phylogeny_masking_(x_out, x_in, keys)
 
-        # use the mask to "remove" insignificant positions
-        x_out = torch.mul(x_out, phylo_mask)
+        x_out = x_out.view(x_out.size(0), -1)
 
         # pass activation through linear fully-connected layers
         x_out = self.fc(x_out)
@@ -1049,7 +1059,7 @@ class PhyloCMKN(nn.Module):
         # initialize the anchor points of all layers that use anchor points in an unsupervised fashion and initialize
         # weights of all convolutional layers
         if init_train_loader is not None:
-            self.initialize(
+            self.initialize_(
                 init_train_loader,
                 distance=distance,
                 n_sampling_motifs=n_sampling_motifs,
@@ -1057,7 +1067,7 @@ class PhyloCMKN(nn.Module):
                 use_cuda=use_cuda,
             )
         else:
-            self.initialize(
+            self.initialize_(
                 train_loader,
                 distance=distance,
                 n_sampling_motifs=n_sampling_motifs,
