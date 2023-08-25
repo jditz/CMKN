@@ -852,13 +852,14 @@ class PhyloCMKN(nn.Module):
         Returns:
             The input with all positions that are identical to the selected phylogeny sequence set to zero
         """
-        out = torch.Tensor(x_in.size())
+        # create a tensor with the same shape as x_in and on the same device
+        out = x_in.new(x_in.size())
 
         for i, key in enumerate(keys):
             # create a boolean tensor of length self.seq_len that indicates for each position
             # whether the input and mask sequence are identical at this position
             mask = (
-                torch.eq(x_seq[i, :], self.phylo_masks[key])
+                torch.eq(x_seq[i, :], self.phylo_masks[key].to(x_seq))
                 .sum(dim=0)
                 .lt(self.seq_len)
                 .double()
